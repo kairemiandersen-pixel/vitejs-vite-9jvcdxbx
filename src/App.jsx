@@ -63,6 +63,9 @@ function normaliseVisit(row) {
     favourite: row.favourite,
     visitDate: row.visit_date,
     createdAt: row.created_at,
+    visibility:
+      row.visibility ||
+      'friends',
   };
 }
 function navigateToCoordinates(latitude, longitude) {
@@ -269,7 +272,7 @@ function ProfileScreen({ session, profile, onSaved }) {
         },
         { onConflict: "id" },
       )
-      .select("id,display_name,username,created_at")
+      .select("id,display_name,username,created_at,default_visit_visibility")
       .single();
     setSaving(false);
     if (result.error) {
@@ -382,7 +385,7 @@ function FriendsScreen({ session }) {
     const result = await supabase
       .from("gelato_visits")
       .select(
-        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at",
+        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at,visibility"
       )
       .in("user_id", friendIds)
       .order("visit_date", { ascending: false })
@@ -412,7 +415,7 @@ function FriendsScreen({ session }) {
     setErrorMessage("");
     const result = await supabase
       .from("friendships")
-      .select("id,requester_id,addressee_id,status,created_at")
+      .select("id,requester_id,addressee_id,status,created_at,visibility")
       .or(
         "requester_id.eq." +
           currentUserId +
@@ -864,13 +867,20 @@ function GelatoHunter({ session, profile }) {
   const [saveMessage, setSaveMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [onlyFavourites, setOnlyFavourites] = useState(false);
+  const [
+    visibility,
+    setVisibility,
+  ] = useState(
+    profile.default_visit_visibility ||
+    'friends'
+  );
   const radius = SEARCH_RADII[radiusIndex];
   const loadVisits = useCallback(async () => {
     setHistoryLoading(true);
     const result = await supabase
       .from("gelato_visits")
       .select(
-        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at",
+        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at,visibility"
       )
       .eq("user_id", user.id)
       .order("visit_date", { ascending: false })
@@ -972,6 +982,10 @@ function GelatoHunter({ session, profile }) {
     setVisitDate(today());
     setFavourite(false);
     setSaveMessage("");
+    setVisibility(
+      profile.default_visit_visibility ||
+      'friends'
+    );    
   }
   async function saveVisit() {
     if (!rating) {
@@ -991,10 +1005,12 @@ function GelatoHunter({ session, profile }) {
         flavour: flavour.trim() || null,
         rating,
         favourite,
+        visibility:
+  visibility,
         visit_date: visitDate,
       })
       .select(
-        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at",
+        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at,visibility"
       )
       .single();
     setSaving(false);
@@ -1026,7 +1042,7 @@ function GelatoHunter({ session, profile }) {
       .eq("id", visit.id)
       .eq("user_id", user.id)
       .select(
-        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at",
+        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at,visibility"
       )
       .single();
     if (!result.error) {
@@ -1207,6 +1223,11 @@ function GelatoHunter({ session, profile }) {
                     {" "}
                     <h3> {visit.placeName} </h3>{" "}
                     <small> 📅 {formatDate(visit.visitDate)} </small>{" "}
+                    <div className="privacy-label">
+  {" "}
+  {visit.visibility === "private" ? "🔒 Privat" : "👥 Synlig for venner"}{" "}
+</div>;
+
                   </div>{" "}
                   <button
                     className="heart"
@@ -1311,7 +1332,41 @@ function GelatoHunter({ session, profile }) {
             >
               {" "}
               {favourite ? "❤️ Favoritt" : "♡ Marker som favoritt"}{" "}
-            </button>{" "}
+            </button>
+            <div className="privacy-box">
+  {" "}
+  <label> Hvem kan se besøket? </label>{" "}
+  <div className="privacy-options">
+    {" "}
+    <button
+      type="button"
+      className={
+        visibility === "friends" ? "privacy-option active" : "privacy-option"
+      }
+      onClick={() => setVisibility("friends")}
+    >
+      {" "}
+      👥 Venner{" "}
+    </button>{" "}
+    <button
+      type="button"
+      className={
+        visibility === "private" ? "privacy-option active" : "privacy-option"
+      }
+      onClick={() => setVisibility("private")}
+    >
+      {" "}
+      🔒 Privat{" "}
+    </button>{" "}
+  </div>{" "}
+  <small className="muted">
+    {" "}
+    {visibility === "friends"
+      ? "Godkjente venner kan se besøket i vennefeeden."
+      : "Bare du kan se dette besøket."}{" "}
+  </small>{" "}
+</div>;
+            {" "}
             <button
               className="green-button"
               disabled={saving}
@@ -1329,7 +1384,7 @@ function GelatoHunter({ session, profile }) {
 }
 function Styles() {
   return (
-    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .center-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .center-page { display: flex; align-items: center; justify-content: center; padding: 24px; } .panel { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .large-logo { font-size: 65px; text-align: center; } .brand, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .centered { text-align: center; } label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder, .username-row input::placeholder { color: #999999; opacity: 1; } .username-row { display: flex; align-items: center; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; } .username-row span { padding-left: 13px; color: #f97316; font-size: 18px; font-weight: 900; } .username-row input { width: 100%; padding: 12px 13px 12px 4px; border: 0; outline: 0; background: #ffffff; color: #202020; } .preview-box, .message, .error-box, .success-box { margin-top: 12px; padding: 12px; border-radius: 11px; text-align: center; } .preview-box, .message { background: #fff0d9; color: #94470c; } .error-box { background: #fff0f0; color: #a32222; } .success-box { background: #eef8ef; color: #287348; } .green-button, .orange-button, .white-button, .delete-button { padding: 12px 14px; border-radius: 12px; font-weight: 900; cursor: pointer; } .green-button { width: 100%; margin-top: 16px; border: 0; background: #2e7d4f; color: #ffffff; } .orange-button { border: 0; background: #f97316; color: #ffffff; } .orange-button.full { width: 100%; } .white-button { border: 2px solid #e7d7c5; background: #ffffff; color: #555555; } .white-button.full, .white-button.favourite { width: 100%; margin-top: 14px; } .white-button.favourite { border-color: #f97316; background: #fff0d9; color: #d65e00; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .link-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .link-button.full { width: 100%; } .switch-row { margin-top: 18px; color: #666666; text-align: center; } .switch-row .link-button { margin-left: 5px; } .muted { color: #666666; } .header, .content { max-width: 820px; margin: 0 auto; padding: 20px 14px; } .top-row, .section-head, .actions { display: flex; justify-content: space-between; gap: 12px; } .header nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 17px; } .tab { padding: 11px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .tab.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .map-wrap { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .list, .feed-list { display: grid; gap: 10px; margin-top: 12px; } .place-card, .history-card, .friend-card, .feed-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card, .friend-card { display: flex; align-items: center; gap: 12px; text-align: left; } .place-card { cursor: pointer; } .number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .grow { flex: 1; min-width: 0; } .arrow { color: #bbbbbb; font-size: 30px; } .history-card h3 { margin: 0; } .rating { display: flex; gap: 4px; margin-top: 14px; font-size: 25px; } .rating .off { filter: grayscale(1); opacity: 0.22; } .tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .actions { margin-top: 12px; } .actions button { flex: 1; } .friend-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 14px 0 20px; } .friend-section { margin-top: 24px; } .friend-section h3 { margin-bottom: 10px; } .avatar { width: 42px; height: 42px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; font-size: 22px; } .friend-actions { display: flex; gap: 6px; } .compact { width: auto; margin: 0; padding: 9px 11px; white-space: nowrap; } .badge { padding: 7px 10px; border-radius: 999px; background: #f0f0f0; color: #666666; font-size: 12px; font-weight: 900; } .badge.accepted { background: #eef8ef; color: #287348; } .feed-person { display: flex; align-items: center; gap: 11px; } .feed-heart { font-size: 22px; } .feed-place { margin: 15px 0 4px; } .feed-date, .feed-google-rating { color: #666666; font-size: 13px; } .feed-rating-text { margin-top: 4px; color: #f97316; font-size: 13px; font-weight: 900; } .feed-card .full { margin-top: 12px; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(20, 15, 10, 0.42); } .dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone.selected { border-color: #f97316; background: #fff0d9; } .cone span { font-size: 27px; } @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } .friend-search { grid-template-columns: 1fr; } .friend-card { align-items: flex-start; flex-wrap: wrap; } .friend-actions { width: 100%; } .friend-actions button { flex: 1; } } `}</style>
+    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .center-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .center-page { display: flex; align-items: center; justify-content: center; padding: 24px; } .panel { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .large-logo { font-size: 65px; text-align: center; } .brand, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .centered { text-align: center; } label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder, .username-row input::placeholder { color: #999999; opacity: 1; } .username-row { display: flex; align-items: center; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; } .username-row span { padding-left: 13px; color: #f97316; font-size: 18px; font-weight: 900; } .username-row input { width: 100%; padding: 12px 13px 12px 4px; border: 0; outline: 0; background: #ffffff; color: #202020; } .preview-box, .message, .error-box, .success-box { margin-top: 12px; padding: 12px; border-radius: 11px; text-align: center; } .preview-box, .message { background: #fff0d9; color: #94470c; } .error-box { background: #fff0f0; color: #a32222; } .success-box { background: #eef8ef; color: #287348; } .green-button, .orange-button, .white-button, .delete-button { padding: 12px 14px; border-radius: 12px; font-weight: 900; cursor: pointer; } .green-button { width: 100%; margin-top: 16px; border: 0; background: #2e7d4f; color: #ffffff; } .orange-button { border: 0; background: #f97316; color: #ffffff; } .orange-button.full { width: 100%; } .white-button { border: 2px solid #e7d7c5; background: #ffffff; color: #555555; } .white-button.full, .white-button.favourite { width: 100%; margin-top: 14px; } .white-button.favourite { border-color: #f97316; background: #fff0d9; color: #d65e00; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .link-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .link-button.full { width: 100%; } .switch-row { margin-top: 18px; color: #666666; text-align: center; } .switch-row .link-button { margin-left: 5px; } .muted { color: #666666; } .header, .content { max-width: 820px; margin: 0 auto; padding: 20px 14px; } .top-row, .section-head, .actions { display: flex; justify-content: space-between; gap: 12px; } .header nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 17px; } .tab { padding: 11px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .tab.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .map-wrap { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .list, .feed-list { display: grid; gap: 10px; margin-top: 12px; } .place-card, .history-card, .friend-card, .feed-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card, .friend-card { display: flex; align-items: center; gap: 12px; text-align: left; } .place-card { cursor: pointer; } .number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .grow { flex: 1; min-width: 0; } .arrow { color: #bbbbbb; font-size: 30px; } .history-card h3 { margin: 0; } .rating { display: flex; gap: 4px; margin-top: 14px; font-size: 25px; } .rating .off { filter: grayscale(1); opacity: 0.22; } .tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .actions { margin-top: 12px; } .actions button { flex: 1; } .friend-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 14px 0 20px; } .friend-section { margin-top: 24px; } .friend-section h3 { margin-bottom: 10px; } .avatar { width: 42px; height: 42px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; font-size: 22px; } .friend-actions { display: flex; gap: 6px; } .compact { width: auto; margin: 0; padding: 9px 11px; white-space: nowrap; } .badge { padding: 7px 10px; border-radius: 999px; background: #f0f0f0; color: #666666; font-size: 12px; font-weight: 900; } .badge.accepted { background: #eef8ef; color: #287348; } .feed-person { display: flex; align-items: center; gap: 11px; } .feed-heart { font-size: 22px; } .feed-place { margin: 15px 0 4px; } .feed-date, .feed-google-rating { color: #666666; font-size: 13px; } .feed-rating-text { margin-top: 4px; color: #f97316; font-size: 13px; font-weight: 900; } .feed-card .full { margin-top: 12px; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(20, 15, 10, 0.42); } .dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone.selected { border-color: #f97316; background: #fff0d9; } .cone span { font-size: 27px; } .privacy-box { margin-top: 16px; padding: 14px; border-radius: 14px; background: #fffaf1; } .privacy-box label { margin-top: 0; } .privacy-options { display: grid; grid-template-columns: repeat( 2, minmax(0, 1fr) ); gap: 8px; margin-bottom: 8px; } .privacy-option { padding: 11px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #555555; font-weight: 900; cursor: pointer; } .privacy-option.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .privacy-label { display: inline-block; margin-top: 8px; padding: 5px 8px; border-radius: 999px; background: #f3f3f3; color: #666666; font-size: 11px; font-weight: 900; } @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } .friend-search { grid-template-columns: 1fr; } .friend-card { align-items: flex-start; flex-wrap: wrap; } .friend-actions { width: 100%; } .friend-actions button { flex: 1; } } `}</style>
   );
 }
 function App() {
@@ -1365,7 +1420,7 @@ function App() {
       setProfileError("");
       const result = await supabase
         .from("profiles")
-        .select("id,display_name,username,created_at")
+        .select("id,display_name,username,created_at,default_visit_visibility")
         .eq("id", session.user.id)
         .maybeSingle();
       if (result.error) {
