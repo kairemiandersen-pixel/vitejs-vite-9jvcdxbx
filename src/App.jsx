@@ -6,7 +6,7 @@ import {
   useMapsLibrary,
 } from "@vis.gl/react-google-maps";
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-const STORAGE_KEY = "gelato_hunter_web_ratings";
+const VISITS_STORAGE_KEY = "gelato_hunter_web_visits";
 function degreesToRadians(degrees) {
   return degrees * (Math.PI / 180);
 }
@@ -32,38 +32,61 @@ function formatDistance(distanceMetres) {
   }
   return (distanceMetres / 1000).toFixed(1) + " km";
 }
-function formatRadius(radius) {
-  return radius / 1000 + " km";
+function formatRadius(radiusMetres) {
+  return radiusMetres / 1000 + " km";
 }
-function loadSavedRatings() {
+function getTodayDate() {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return year + "-" + month + "-" + day;
+}
+function formatVisitDate(dateValue) {
+  if (!dateValue) {
+    return "";
+  }
+  const parts = dateValue.split("-");
+  if (parts.length !== 3) {
+    return dateValue;
+  }
+  return parts[2] + "." + parts[1] + "." + parts[0];
+}
+function loadSavedVisits() {
   try {
-    const savedRatings = window.localStorage.getItem(STORAGE_KEY);
-    if (!savedRatings) {
+    const savedVisits = window.localStorage.getItem(VISITS_STORAGE_KEY);
+    if (!savedVisits) {
       return {};
     }
-    return JSON.parse(savedRatings);
+    return JSON.parse(savedVisits);
   } catch (error) {
-    console.error("Kunne ikke laste vurderinger:", error);
+    console.error("Kunne ikke laste besøk:", error);
     return {};
   }
 }
-function saveRatings(ratings) {
+function saveVisits(visits) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(ratings));
+    window.localStorage.setItem(VISITS_STORAGE_KEY, JSON.stringify(visits));
+    return true;
   } catch (error) {
-    console.error("Kunne ikke lagre vurderinger:", error);
+    console.error("Kunne ikke lagre besøk:", error);
+    return false;
   }
 }
 function GelatoHunter() {
   const placesLibrary = useMapsLibrary("places");
   const [userPosition, setUserPosition] = useState(null);
   const [places, setPlaces] = useState([]);
-  const [ratings, setRatings] = useState(loadSavedRatings);
+  const [visits, setVisits] = useState(loadSavedVisits);
   const [selectedPlace, setSelectedPlace] = useState(null);
   const [locationStatus, setLocationStatus] = useState("loading");
   const [placesStatus, setPlacesStatus] = useState("waiting");
   const [searchRadius, setSearchRadius] = useState(5000);
   const [message, setMessage] = useState("Finner posisjonen din...");
+  const [flavourInput, setFlavourInput] = useState("");
+  const [visitDateInput, setVisitDateInput] = useState(getTodayDate());
+  const [favouriteInput, setFavouriteInput] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
   useEffect(() => {
     if (!navigator.geolocation) {
       setLocationStatus("error");
@@ -173,12 +196,90 @@ function GelatoHunter() {
   useEffect(() => {
     findGelatoPlaces();
   }, [findGelatoPlaces]);
-  const selectedRating = useMemo(() => {
+  const selectedVisit = useMemo(() => {
     if (!selectedPlace) {
-      return 0;
+      return null;
     }
-    return ratings[selectedPlace.id] || 0;
-  }, [selectedPlace, ratings]);
+    return visits[selectedPlace.id] || null;
+  }, [selectedPlace, visits]);
+  const selectedRating = selectedVisit?.rating || 0;
+  function openPlace(place) {
+    const savedVisit = visits[place.id];
+    setSelectedPlace(place);
+    setFlavourInput(savedVisit?.flavour || "");
+    setVisitDateInput(savedVisit?.visitDate || getTodayDate());
+    setFavouriteInput(savedVisit?.favourite || false);
+    setSaveMessage("");
+  }
+  function closePlace() {
+    setSelectedPlace(null);
+    setSaveMessage("");
+  }
+  function updateVisit(place, updates) {
+    const currentVisit = visits[place.id] || {};
+    const updatedVisit = {
+      placeId: place.id,
+      placeName: place.name,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      rating: currentVisit.rating || 0,
+      flavour: currentVisit.flavour || "",
+      favourite: currentVisit.favourite || false,
+      visitDate: currentVisit.visitDate || "",
+      updatedAt: new Date().toISOString(),
+      ...currentVisit,
+      ...updates,
+    };
+    const updatedVisits = { ...visits };
+    updatedVisits[place.id] = updatedVisit;
+    setVisits(updatedVisits);
+    const saved = saveVisits(updatedVisits);
+    if (saved) {
+      setSaveMessage("Opplysningene er lagret");
+    } else {
+      setSaveMessage("Opplysningene kunne ikke lagres");
+    }
+  }
+  function ratePlace(place, rating) {
+    updateVisit(place, {
+      rating: rating,
+      flavour: flavourInput.trim(),
+      favourite: favouriteInput,
+      visitDate: visitDateInput,
+    });
+  }
+  function saveVisitDetails() {
+    if (!selectedPlace) {
+      return;
+    }
+    updateVisit(selectedPlace, {
+      flavour: flavourInput.trim(),
+      favourite: favouriteInput,
+      visitDate: visitDateInput,
+    });
+  }
+  function toggleFavourite() {
+    if (!selectedPlace) {
+      return;
+    }
+    const newFavourite = !favouriteInput;
+    setFavouriteInput(newFavourite);
+    updateVisit(selectedPlace, {
+      favourite: newFavourite,
+      flavour: flavourInput.trim(),
+      visitDate: visitDateInput,
+    });
+  }
+  function deleteVisit(placeId) {
+    const updatedVisits = { ...visits };
+    delete updatedVisits[placeId];
+    setVisits(updatedVisits);
+    saveVisits(updatedVisits);
+    setFlavourInput("");
+    setFavouriteInput(false);
+    setVisitDateInput(getTodayDate());
+    setSaveMessage("Besøket er slettet");
+  }
   function increaseSearchRadius() {
     setSelectedPlace(null);
     if (searchRadius === 5000) {
@@ -203,23 +304,11 @@ function GelatoHunter() {
     if (searchRadius === 25000) {
       return "50 km";
     }
-    return null;
+    return "";
   }
   function resetSearchRadius() {
     setSearchRadius(5000);
     setSelectedPlace(null);
-  }
-  function ratePlace(placeId, rating) {
-    const updatedRatings = { ...ratings };
-    updatedRatings[placeId] = rating;
-    setRatings(updatedRatings);
-    saveRatings(updatedRatings);
-  }
-  function deleteRating(placeId) {
-    const updatedRatings = { ...ratings };
-    delete updatedRatings[placeId];
-    setRatings(updatedRatings);
-    saveRatings(updatedRatings);
   }
   function navigateToPlace(place) {
     if (place.googleMapsURI) {
@@ -252,6 +341,7 @@ function GelatoHunter() {
         <h1 style={styles.loadingTitle}> GELATO HUNTER </h1>{" "}
         <p style={styles.errorMessage}> {message} </p>{" "}
         <button
+          type="button"
           style={styles.primaryButton}
           onClick={() => window.location.reload()}
         >
@@ -286,7 +376,7 @@ function GelatoHunter() {
               key={place.id}
               position={{ lat: place.latitude, lng: place.longitude }}
               title={place.name}
-              onClick={() => setSelectedPlace(place)}
+              onClick={() => openPlace(place)}
             />
           ))}{" "}
         </Map>{" "}
@@ -333,10 +423,6 @@ function GelatoHunter() {
             <div style={styles.maxRadiusCard}>
               {" "}
               <strong> Ingen iskremsteder funnet innen 50 km. </strong>{" "}
-              <div style={styles.maxRadiusText}>
-                {" "}
-                Vi har nå søkt med maksimal radius.{" "}
-              </div>{" "}
               <button
                 type="button"
                 style={styles.resetButton}
@@ -350,19 +436,22 @@ function GelatoHunter() {
         <div style={styles.placeList}>
           {" "}
           {places.map((place, index) => {
-            const personalRating = ratings[place.id] || 0;
+            const visit = visits[place.id];
             return (
               <button
                 key={place.id}
                 type="button"
                 style={styles.placeCard}
-                onClick={() => setSelectedPlace(place)}
+                onClick={() => openPlace(place)}
               >
                 {" "}
                 <div style={styles.placeNumber}> {index + 1} </div>{" "}
                 <div style={styles.placeInfo}>
                   {" "}
-                  <strong style={styles.placeName}> {place.name} </strong>{" "}
+                  <strong style={styles.placeName}>
+                    {" "}
+                    {place.name} {visit?.favourite ? " ❤️" : ""}{" "}
+                  </strong>{" "}
                   <div style={styles.placeMetadata}>
                     {" "}
                     <span style={styles.distance}>
@@ -373,10 +462,22 @@ function GelatoHunter() {
                       <span> Google {place.rating} ⭐ </span>
                     )}{" "}
                   </div>{" "}
-                  {personalRating > 0 && (
+                  {visit?.rating > 0 && (
                     <div style={styles.personalRating}>
                       {" "}
-                      Din vurdering: {personalRating} av 5 🍦{" "}
+                      Din vurdering: {visit.rating} av 5 🍦{" "}
+                    </div>
+                  )}{" "}
+                  {visit?.flavour && (
+                    <div style={styles.visitDetail}>
+                      {" "}
+                      Smak: {visit.flavour}{" "}
+                    </div>
+                  )}{" "}
+                  {visit?.visitDate && (
+                    <div style={styles.visitDetail}>
+                      {" "}
+                      Besøkt: {formatVisitDate(visit.visitDate)}{" "}
                     </div>
                   )}{" "}
                 </div>{" "}
@@ -387,7 +488,7 @@ function GelatoHunter() {
         </div>{" "}
       </section>{" "}
       {selectedPlace && (
-        <div style={styles.overlay} onClick={() => setSelectedPlace(null)}>
+        <div style={styles.overlay} onClick={closePlace}>
           {" "}
           <section
             style={styles.placeDialog}
@@ -398,12 +499,29 @@ function GelatoHunter() {
               type="button"
               aria-label="Lukk"
               style={styles.closeButton}
-              onClick={() => setSelectedPlace(null)}
+              onClick={closePlace}
             >
               {" "}
               ×{" "}
             </button>{" "}
-            <h2 style={styles.dialogTitle}> {selectedPlace.name} </h2>{" "}
+            <div style={styles.dialogHeadingRow}>
+              {" "}
+              <h2 style={styles.dialogTitle}> {selectedPlace.name} </h2>{" "}
+              <button
+                type="button"
+                aria-label={
+                  favouriteInput ? "Fjern favoritt" : "Legg til favoritt"
+                }
+                style={{
+                  ...styles.favouriteButton,
+                  ...(favouriteInput ? styles.favouriteButtonActive : {}),
+                }}
+                onClick={toggleFavourite}
+              >
+                {" "}
+                {favouriteInput ? "❤️" : "♡"}{" "}
+              </button>{" "}
+            </div>{" "}
             <div style={styles.dialogMeta}>
               {" "}
               📍 {formatDistance(selectedPlace.distanceMetres)} unna{" "}
@@ -436,7 +554,7 @@ function GelatoHunter() {
                       ...styles.coneButton,
                       ...(isSelected ? styles.coneButtonSelected : {}),
                     }}
-                    onClick={() => ratePlace(selectedPlace.id, number)}
+                    onClick={() => ratePlace(selectedPlace, number)}
                   >
                     {" "}
                     <span style={styles.cone}> 🍦 </span>{" "}
@@ -453,31 +571,63 @@ function GelatoHunter() {
                 );
               })}{" "}
             </div>{" "}
+            <div style={styles.formSection}>
+              {" "}
+              <label style={styles.fieldLabel}> Smak du prøvde </label>{" "}
+              <input
+                type="text"
+                value={flavourInput}
+                maxLength={60}
+                placeholder="For eksempel pistasj"
+                style={styles.textInput}
+                onChange={(event) => setFlavourInput(event.target.value)}
+              />{" "}
+              <label style={styles.fieldLabel}> Besøksdato </label>{" "}
+              <input
+                type="date"
+                value={visitDateInput}
+                max={getTodayDate()}
+                style={styles.textInput}
+                onChange={(event) => setVisitDateInput(event.target.value)}
+              />{" "}
+              <button
+                type="button"
+                style={styles.saveButton}
+                onClick={saveVisitDetails}
+              >
+                {" "}
+                Lagre smak og besøksdato{" "}
+              </button>{" "}
+            </div>{" "}
             <div style={styles.ratingResult}>
               {" "}
-              {selectedRating > 0 ? (
-                <>
+              {saveMessage ? (
+                <strong style={styles.savedText}> ✓ {saveMessage} </strong>
+              ) : selectedVisit ? (
+                <strong style={styles.savedText}>
                   {" "}
-                  <strong style={styles.savedText}>
-                    {" "}
-                    ✓ Vurdering lagret: {selectedRating} av 5 🍦{" "}
-                  </strong>{" "}
-                  <button
-                    type="button"
-                    style={styles.deleteButton}
-                    onClick={() => deleteRating(selectedPlace.id)}
-                  >
-                    {" "}
-                    Slett vurdering{" "}
-                  </button>{" "}
-                </>
+                  Lagret{" "}
+                  {selectedRating
+                    ? ": " + selectedRating + " av 5 🍦"
+                    : ""}{" "}
+                </strong>
               ) : (
                 <span style={styles.helpText}>
                   {" "}
-                  Trykk på en kjegle for å gi din vurdering{" "}
+                  Velg rating og legg inn besøksdetaljer{" "}
                 </span>
               )}{" "}
             </div>{" "}
+            {selectedVisit && (
+              <button
+                type="button"
+                style={styles.deleteButton}
+                onClick={() => deleteVisit(selectedPlace.id)}
+              >
+                {" "}
+                Slett besøksdata{" "}
+              </button>
+            )}{" "}
           </section>{" "}
         </div>
       )}{" "}
@@ -493,7 +643,8 @@ function App() {
         <h1 style={styles.loadingTitle}> GELATO HUNTER </h1>{" "}
         <p style={styles.errorMessage}>
           {" "}
-          Google Maps API-nøkkel mangler. Kontroller .env-filen.{" "}
+          Google Maps API-nøkkel mangler. Kontroller miljøvariabelen
+          VITE_GOOGLE_MAPS_API_KEY.{" "}
         </p>{" "}
       </main>
     );
@@ -584,9 +735,9 @@ const styles = {
     color: "#444444",
     textAlign: "center",
   },
-  maxRadiusText: { marginTop: 6, color: "#777777", fontSize: 13 },
   resetButton: {
-    marginTop: 14,
+    display: "block",
+    margin: "14px auto 0",
     padding: "10px 16px",
     border: "2px solid #F97316",
     borderRadius: 12,
@@ -644,6 +795,7 @@ const styles = {
     fontSize: 12,
     fontWeight: 800,
   },
+  visitDetail: { marginTop: 3, color: "#666666", fontSize: 12 },
   arrow: { color: "#BBBBBB", fontSize: 30 },
   overlay: {
     position: "fixed",
@@ -653,11 +805,15 @@ const styles = {
     alignItems: "flex-end",
     justifyContent: "center",
     padding: 12,
-    background: "rgba(20,15,10,0.38)",
+    boxSizing: "border-box",
+    overflowY: "auto",
+    background: "rgba(20, 15, 10, 0.38)",
   },
   placeDialog: {
     position: "relative",
     width: "min(540px, 100%)",
+    maxHeight: "92vh",
+    overflowY: "auto",
     boxSizing: "border-box",
     padding: "24px 18px 18px",
     borderRadius: 24,
@@ -675,7 +831,24 @@ const styles = {
     fontSize: 30,
     cursor: "pointer",
   },
-  dialogTitle: { margin: 0, paddingRight: 40, fontSize: 23 },
+  dialogHeadingRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    paddingRight: 40,
+  },
+  dialogTitle: { flex: 1, margin: 0, fontSize: 23 },
+  favouriteButton: {
+    width: 48,
+    height: 44,
+    flexShrink: 0,
+    border: "2px solid #E2E2E2",
+    borderRadius: 14,
+    background: "#F6F6F6",
+    fontSize: 25,
+    cursor: "pointer",
+  },
+  favouriteButtonActive: { borderColor: "#F97316", background: "#FFF0D9" },
   dialogMeta: { marginTop: 5, color: "#666666", fontSize: 14 },
   navigateButton: {
     width: "100%",
@@ -711,6 +884,37 @@ const styles = {
   cone: { fontSize: 29 },
   coneNumber: { marginTop: 2, color: "#999999", fontSize: 13, fontWeight: 900 },
   coneNumberSelected: { color: "#F97316" },
+  formSection: {
+    display: "grid",
+    gap: 8,
+    marginTop: 17,
+    padding: 14,
+    borderRadius: 15,
+    background: "#FFF8ED",
+  },
+  fieldLabel: { marginTop: 3, color: "#444444", fontSize: 13, fontWeight: 800 },
+  textInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "12px 13px",
+    border: "2px solid #E8DED1",
+    borderRadius: 12,
+    background: "#FFFFFF",
+    color: "#222222",
+    fontSize: 16,
+  },
+  saveButton: {
+    width: "100%",
+    marginTop: 5,
+    padding: "12px 14px",
+    border: 0,
+    borderRadius: 12,
+    background: "#2E7D4F",
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: 900,
+    cursor: "pointer",
+  },
   ratingResult: {
     display: "flex",
     flexDirection: "column",
@@ -724,6 +928,9 @@ const styles = {
   savedText: { color: "#F97316", textAlign: "center" },
   helpText: { color: "#777777", fontSize: 13, textAlign: "center" },
   deleteButton: {
+    display: "block",
+    margin: "10px auto 0",
+    padding: 8,
     border: 0,
     background: "transparent",
     color: "#AA3333",
