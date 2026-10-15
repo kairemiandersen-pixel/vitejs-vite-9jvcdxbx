@@ -65,6 +65,28 @@ function normaliseVisit(row) {
     createdAt: row.created_at,
   };
 }
+function navigateToCoordinates(latitude, longitude) {
+  const destination = latitude + "," + longitude;
+  const url =
+    "https://www.google.com/maps/dir/?api=1" +
+    "&destination=" +
+    encodeURIComponent(destination) +
+    "&travelmode=walking";
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+function RatingCones({ rating }) {
+  return (
+    <div className="rating">
+      {" "}
+      {[1, 2, 3, 4, 5].map((number) => (
+        <span key={number} className={number <= rating ? "" : "off"}>
+          {" "}
+          🍦{" "}
+        </span>
+      ))}{" "}
+    </div>
+  );
+}
 function AuthScreen() {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
@@ -142,8 +164,11 @@ function AuthScreen() {
       <section className="panel">
         {" "}
         <div className="large-logo"> 🍦 </div>{" "}
-        <div className="brand"> GELATO HUNTER </div>{" "}
-        <h1> {mode === "login" ? "Velkommen tilbake" : "Opprett konto"} </h1>{" "}
+        <div className="brand centered"> GELATO HUNTER </div>{" "}
+        <h1 className="centered">
+          {" "}
+          {mode === "login" ? "Velkommen tilbake" : "Opprett konto"}{" "}
+        </h1>{" "}
         <form onSubmit={submit}>
           {" "}
           {mode === "signup" && (
@@ -153,7 +178,7 @@ function AuthScreen() {
               <input
                 className="text-input"
                 value={displayName}
-                placeholder="Ditt Navn"
+                placeholder="Ditt navn"
                 onChange={(event) => setDisplayName(event.target.value)}
               />{" "}
             </>
@@ -184,7 +209,7 @@ function AuthScreen() {
           </button>{" "}
         </form>{" "}
         {mode === "login" && (
-          <button className="link-button" onClick={resetPassword}>
+          <button className="link-button full" onClick={resetPassword}>
             {" "}
             Glemt passord?{" "}
           </button>
@@ -213,7 +238,7 @@ function AuthScreen() {
   );
 }
 function ProfileScreen({ session, profile, onSaved }) {
-  const [ displayName, setDisplayName, ] = useState( profile?.display_name || '' );
+  const [displayName, setDisplayName] = useState(profile?.display_name || "");
   const [username, setUsername] = useState(profile?.username || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -237,18 +262,22 @@ function ProfileScreen({ session, profile, onSaved }) {
     const result = await supabase
       .from("profiles")
       .upsert(
-        { id: user.id, display_name: cleanName, username: cleanUsername },
+        {
+          id: session.user.id,
+          display_name: cleanName,
+          username: cleanUsername,
+        },
         { onConflict: "id" },
       )
       .select("id,display_name,username,created_at")
       .single();
     setSaving(false);
     if (result.error) {
-      if (result.error.code === "23505") {
-        setError("Dette brukernavnet er allerede tatt.");
-      } else {
-        setError("Profilen kunne ikke lagres: " + result.error.message);
-      }
+      setError(
+        result.error.code === "23505"
+          ? "Dette brukernavnet er allerede tatt."
+          : "Profilen kunne ikke lagres: " + result.error.message,
+      );
       return;
     }
     onSaved(result.data);
@@ -260,7 +289,8 @@ function ProfileScreen({ session, profile, onSaved }) {
       <section className="panel">
         {" "}
         <div className="large-logo"> 👤 </div>{" "}
-        <div className="brand"> GELATO HUNTER </div> <h1>Min profil</h1>{" "}
+        <div className="brand centered"> GELATO HUNTER </div>{" "}
+        <h1 className="centered"> Min profil </h1>{" "}
         <p className="muted centered">
           {" "}
           Velg navnet vennene dine skal se og et unikt brukernavn.{" "}
@@ -272,7 +302,7 @@ function ProfileScreen({ session, profile, onSaved }) {
             className="text-input"
             value={displayName}
             maxLength={40}
-            placeholder="Ditt Navn"
+            placeholder="Ditt navn"
             onChange={(event) => setDisplayName(event.target.value)}
           />{" "}
           <label>Brukernavn</label>{" "}
@@ -282,7 +312,7 @@ function ProfileScreen({ session, profile, onSaved }) {
             <input
               value={username}
               maxLength={20}
-              placeholder="kairemi"
+              placeholder="brukernavn"
               onChange={changeUsername}
             />{" "}
           </div>{" "}
@@ -320,7 +350,9 @@ function FriendsScreen({ session }) {
   const [incomingRequests, setIncomingRequests] = useState([]);
   const [outgoingRequests, setOutgoingRequests] = useState([]);
   const [friends, setFriends] = useState([]);
+  const [friendFeed, setFriendFeed] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [feedLoading, setFeedLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -337,6 +369,43 @@ function FriendsScreen({ session }) {
       throw result.error;
     }
     return result.data || [];
+  }, []);
+  const loadFriendFeed = useCallback(async (acceptedFriends) => {
+    const friendIds = acceptedFriends
+      .map((friendship) => friendship.person?.id)
+      .filter(Boolean);
+    if (!friendIds.length) {
+      setFriendFeed([]);
+      return;
+    }
+    setFeedLoading(true);
+    const result = await supabase
+      .from("gelato_visits")
+      .select(
+        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at",
+      )
+      .in("user_id", friendIds)
+      .order("visit_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (result.error) {
+      setErrorMessage("Vennefeeden kunne ikke lastes: " + result.error.message);
+      setFeedLoading(false);
+      return;
+    }
+    const profileMap = Object.fromEntries(
+      acceptedFriends.map((friendship) => [
+        friendship.person?.id,
+        friendship.person,
+      ]),
+    );
+    setFriendFeed(
+      (result.data || []).map((row) => ({
+        ...normaliseVisit(row),
+        person: profileMap[row.user_id],
+      })),
+    );
+    setFeedLoading(false);
   }, []);
   const loadFriendData = useCallback(async () => {
     setLoading(true);
@@ -364,38 +433,36 @@ function FriendsScreen({ session }) {
       const profileMap = Object.fromEntries(
         profiles.map((item) => [item.id, item]),
       );
-      setIncomingRequests(
-        rows
-          .filter(
-            (row) =>
-              row.status === "pending" && row.addressee_id === currentUserId,
-          )
-          .map((row) => ({ ...row, person: profileMap[row.requester_id] })),
-      );
-      setOutgoingRequests(
-        rows
-          .filter(
-            (row) =>
-              row.status === "pending" && row.requester_id === currentUserId,
-          )
-          .map((row) => ({ ...row, person: profileMap[row.addressee_id] })),
-      );
-      setFriends(
-        rows
-          .filter((row) => row.status === "accepted")
-          .map((row) => {
-            const friendId =
-              row.requester_id === currentUserId
-                ? row.addressee_id
-                : row.requester_id;
-            return { ...row, person: profileMap[friendId] };
-          }),
-      );
-    } catch (error) {
+      const incoming = rows
+        .filter(
+          (row) =>
+            row.status === "pending" && row.addressee_id === currentUserId,
+        )
+        .map((row) => ({ ...row, person: profileMap[row.requester_id] }));
+      const outgoing = rows
+        .filter(
+          (row) =>
+            row.status === "pending" && row.requester_id === currentUserId,
+        )
+        .map((row) => ({ ...row, person: profileMap[row.addressee_id] }));
+      const accepted = rows
+        .filter((row) => row.status === "accepted")
+        .map((row) => {
+          const friendId =
+            row.requester_id === currentUserId
+              ? row.addressee_id
+              : row.requester_id;
+          return { ...row, person: profileMap[friendId] };
+        });
+      setIncomingRequests(incoming);
+      setOutgoingRequests(outgoing);
+      setFriends(accepted);
+      await loadFriendFeed(accepted);
+    } catch (loadError) {
       setErrorMessage("Venneprofilene kunne ikke lastes.");
     }
     setLoading(false);
-  }, [currentUserId, getProfilesByIds]);
+  }, [currentUserId, getProfilesByIds, loadFriendFeed]);
   useEffect(() => {
     loadFriendData();
   }, [loadFriendData]);
@@ -446,10 +513,11 @@ function FriendsScreen({ session }) {
     }
   }
   async function sendRequest(person) {
-    const existing = relationshipFor(person.id);
-    if (existing) {
+    setErrorMessage("");
+    const relationship = relationshipFor(person.id);
+    if (relationship) {
       setMessage(
-        existing.type === "accepted"
+        relationship.type === "accepted"
           ? "Dere er allerede venner."
           : "Det finnes allerede en forespørsel.",
       );
@@ -472,6 +540,7 @@ function FriendsScreen({ session }) {
     await loadFriendData();
   }
   async function acceptRequest(friendship) {
+    setErrorMessage("");
     const result = await supabase
       .from("friendships")
       .update({ status: "accepted" })
@@ -487,6 +556,7 @@ function FriendsScreen({ session }) {
     await loadFriendData();
   }
   async function deleteFriendship(friendship, successMessage) {
+    setErrorMessage("");
     const result = await supabase
       .from("friendships")
       .delete()
@@ -506,7 +576,10 @@ function FriendsScreen({ session }) {
         <div>
           {" "}
           <div className="eyebrow"> VENNEOMRÅDE </div> <h2>Venner 👥</h2>{" "}
-          <p className="muted"> Finn andre med unikt brukernavn. </p>{" "}
+          <p className="muted">
+            {" "}
+            Finn venner og se deres siste gelato-besøk.{" "}
+          </p>{" "}
         </div>{" "}
         <button className="white-button" onClick={loadFriendData}>
           {" "}
@@ -700,6 +773,75 @@ function FriendsScreen({ session }) {
           </div>{" "}
         </div>
       )}{" "}
+      <div className="friend-section">
+        {" "}
+        <h3> Vennenes gelatoer 🍦 </h3>{" "}
+        {feedLoading && <div className="message"> Laster vennefeed... </div>}{" "}
+        {!feedLoading && friends.length > 0 && friendFeed.length === 0 && (
+          <div className="message">
+            {" "}
+            Vennene dine har ikke registrert noen besøk ennå.{" "}
+          </div>
+        )}{" "}
+        {!feedLoading && friends.length === 0 && (
+          <div className="message">
+            {" "}
+            Legg til venner for å se gelato-besøkene deres.{" "}
+          </div>
+        )}{" "}
+        <div className="feed-list">
+          {" "}
+          {friendFeed.map((visit) => (
+            <article className="feed-card" key={visit.id}>
+              {" "}
+              <div className="feed-person">
+                {" "}
+                <div className="avatar"> 👤 </div>{" "}
+                <div className="grow">
+                  {" "}
+                  <strong>
+                    {" "}
+                    {visit.person?.display_name ||
+                      visit.person?.username ||
+                      "Gelato Hunter"}{" "}
+                  </strong>{" "}
+                  <div className="muted"> @ {visit.person?.username} </div>{" "}
+                </div>{" "}
+                {visit.favourite && (
+                  <span className="feed-heart"> ❤️ </span>
+                )}{" "}
+              </div>{" "}
+              <h3 className="feed-place"> {visit.placeName} </h3>{" "}
+              <div className="feed-date">
+                {" "}
+                📅 {formatDate(visit.visitDate)}{" "}
+              </div>{" "}
+              <RatingCones rating={visit.rating} />{" "}
+              <div className="feed-rating-text"> {visit.rating} av 5 </div>{" "}
+              {visit.flavour && (
+                <div className="tag"> Smak: {visit.flavour} </div>
+              )}{" "}
+              {visit.googleRating && (
+                <div className="feed-google-rating">
+                  {" "}
+                  Google: {visit.googleRating} ⭐{" "}
+                </div>
+              )}{" "}
+              {visit.latitude && visit.longitude && (
+                <button
+                  className="orange-button full"
+                  onClick={() =>
+                    navigateToCoordinates(visit.latitude, visit.longitude)
+                  }
+                >
+                  {" "}
+                  🧭 Naviger til stedet{" "}
+                </button>
+              )}{" "}
+            </article>
+          ))}{" "}
+        </div>{" "}
+      </div>{" "}
     </section>
   );
 }
@@ -864,6 +1006,10 @@ function GelatoHunter({ session, profile }) {
     setSaveMessage("Besøket er lagret.");
   }
   async function deleteVisit(id) {
+    const confirmed = window.confirm("Vil du slette dette besøket?");
+    if (!confirmed) {
+      return;
+    }
     const result = await supabase
       .from("gelato_visits")
       .delete()
@@ -889,16 +1035,6 @@ function GelatoHunter({ session, profile }) {
         current.map((item) => (item.id === updated.id ? updated : item)),
       );
     }
-  }
-  function navigate(latitude, longitude) {
-    const destination = latitude + "," + longitude;
-    window.open(
-      "https://www.google.com/maps/dir/?api=1&destination=" +
-        encodeURIComponent(destination) +
-        "&travelmode=walking",
-      "_blank",
-      "noopener,noreferrer",
-    );
   }
   return (
     <main className="app">
@@ -1001,7 +1137,7 @@ function GelatoHunter({ session, profile }) {
               !places.length &&
               radiusIndex < SEARCH_RADII.length - 1 && (
                 <button
-                  className="orange-button"
+                  className="orange-button full"
                   onClick={() => setRadiusIndex(radiusIndex + 1)}
                 >
                   {" "}
@@ -1080,18 +1216,7 @@ function GelatoHunter({ session, profile }) {
                     {visit.favourite ? "❤️" : "♡"}{" "}
                   </button>{" "}
                 </div>{" "}
-                <div className="rating">
-                  {" "}
-                  {[1, 2, 3, 4, 5].map((number) => (
-                    <span
-                      className={number <= visit.rating ? "" : "off"}
-                      key={number}
-                    >
-                      {" "}
-                      🍦{" "}
-                    </span>
-                  ))}{" "}
-                </div>{" "}
+                <RatingCones rating={visit.rating} />{" "}
                 {visit.flavour && (
                   <div className="tag"> Smak: {visit.flavour} </div>
                 )}{" "}
@@ -1099,7 +1224,9 @@ function GelatoHunter({ session, profile }) {
                   {" "}
                   <button
                     className="orange-button"
-                    onClick={() => navigate(visit.latitude, visit.longitude)}
+                    onClick={() =>
+                      navigateToCoordinates(visit.latitude, visit.longitude)
+                    }
                   >
                     {" "}
                     🧭 Naviger{" "}
@@ -1136,9 +1263,12 @@ function GelatoHunter({ session, profile }) {
               📍 {formatDistance(selectedPlace.distanceMetres)} unna{" "}
             </p>{" "}
             <button
-              className="orange-button"
+              className="orange-button full"
               onClick={() =>
-                navigate(selectedPlace.latitude, selectedPlace.longitude)
+                navigateToCoordinates(
+                  selectedPlace.latitude,
+                  selectedPlace.longitude,
+                )
               }
             >
               {" "}
@@ -1199,7 +1329,7 @@ function GelatoHunter({ session, profile }) {
 }
 function Styles() {
   return (
-    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .center-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .center-page { display: flex; align-items: center; justify-content: center; padding: 24px; } .panel { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .large-logo { font-size: 65px; text-align: center; } .brand, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .panel .brand, .panel h1, .centered { text-align: center; } label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder, .username-row input::placeholder { color: #999999; opacity: 1; } .username-row { display: flex; align-items: center; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; } .username-row span { padding-left: 13px; color: #f97316; font-size: 18px; font-weight: 900; } .username-row input { width: 100%; padding: 12px 13px 12px 4px; border: 0; outline: 0; background: #ffffff; color: #202020; } .preview-box, .message, .error-box, .success-box { margin-top: 12px; padding: 12px; border-radius: 11px; text-align: center; } .preview-box, .message { background: #fff0d9; color: #94470c; } .error-box { background: #fff0f0; color: #a32222; } .success-box { background: #eef8ef; color: #287348; } .green-button, .orange-button, .white-button, .delete-button { padding: 12px 14px; border-radius: 12px; font-weight: 900; cursor: pointer; } .green-button { width: 100%; margin-top: 16px; border: 0; background: #2e7d4f; color: #ffffff; } .orange-button { border: 0; background: #f97316; color: #ffffff; } .white-button { border: 2px solid #e7d7c5; background: #ffffff; color: #555555; } .white-button.full, .white-button.favourite { width: 100%; margin-top: 14px; } .white-button.favourite { border-color: #f97316; background: #fff0d9; color: #d65e00; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .link-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .link-button.full { width: 100%; } .switch-row { margin-top: 18px; color: #666666; text-align: center; } .switch-row .link-button { margin-left: 5px; } .muted { color: #666666; } .header, .content { max-width: 820px; margin: 0 auto; padding: 20px 14px; } .top-row, .section-head, .actions { display: flex; justify-content: space-between; gap: 12px; } .header nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 17px; } .tab { padding: 11px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .tab.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .map-wrap { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .list { display: grid; gap: 10px; margin-top: 12px; } .place-card, .history-card, .friend-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card, .friend-card { display: flex; align-items: center; gap: 12px; text-align: left; } .place-card { cursor: pointer; } .number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .grow { flex: 1; min-width: 0; } .arrow { color: #bbbbbb; font-size: 30px; } .history-card h3 { margin: 0; } .rating { display: flex; gap: 4px; margin-top: 14px; font-size: 25px; } .rating .off { filter: grayscale(1); opacity: 0.22; } .tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .actions { margin-top: 12px; } .actions button { flex: 1; } .friend-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 14px 0 20px; } .friend-section { margin-top: 24px; } .friend-section h3 { margin-bottom: 10px; } .avatar { width: 42px; height: 42px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; font-size: 22px; } .friend-actions { display: flex; gap: 6px; } .compact { width: auto; margin: 0; padding: 9px 11px; white-space: nowrap; } .badge { padding: 7px 10px; border-radius: 999px; background: #f0f0f0; color: #666666; font-size: 12px; font-weight: 900; } .badge.accepted { background: #eef8ef; color: #287348; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(20, 15, 10, 0.42); } .dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone.selected { border-color: #f97316; background: #fff0d9; } .cone span { font-size: 27px; } @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } .friend-search { grid-template-columns: 1fr; } .friend-card { align-items: flex-start; flex-wrap: wrap; } .friend-actions { width: 100%; } .friend-actions button { flex: 1; } } `}</style>
+    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .center-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .center-page { display: flex; align-items: center; justify-content: center; padding: 24px; } .panel { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .large-logo { font-size: 65px; text-align: center; } .brand, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .centered { text-align: center; } label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder, .username-row input::placeholder { color: #999999; opacity: 1; } .username-row { display: flex; align-items: center; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; } .username-row span { padding-left: 13px; color: #f97316; font-size: 18px; font-weight: 900; } .username-row input { width: 100%; padding: 12px 13px 12px 4px; border: 0; outline: 0; background: #ffffff; color: #202020; } .preview-box, .message, .error-box, .success-box { margin-top: 12px; padding: 12px; border-radius: 11px; text-align: center; } .preview-box, .message { background: #fff0d9; color: #94470c; } .error-box { background: #fff0f0; color: #a32222; } .success-box { background: #eef8ef; color: #287348; } .green-button, .orange-button, .white-button, .delete-button { padding: 12px 14px; border-radius: 12px; font-weight: 900; cursor: pointer; } .green-button { width: 100%; margin-top: 16px; border: 0; background: #2e7d4f; color: #ffffff; } .orange-button { border: 0; background: #f97316; color: #ffffff; } .orange-button.full { width: 100%; } .white-button { border: 2px solid #e7d7c5; background: #ffffff; color: #555555; } .white-button.full, .white-button.favourite { width: 100%; margin-top: 14px; } .white-button.favourite { border-color: #f97316; background: #fff0d9; color: #d65e00; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .link-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .link-button.full { width: 100%; } .switch-row { margin-top: 18px; color: #666666; text-align: center; } .switch-row .link-button { margin-left: 5px; } .muted { color: #666666; } .header, .content { max-width: 820px; margin: 0 auto; padding: 20px 14px; } .top-row, .section-head, .actions { display: flex; justify-content: space-between; gap: 12px; } .header nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 17px; } .tab { padding: 11px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .tab.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .map-wrap { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .list, .feed-list { display: grid; gap: 10px; margin-top: 12px; } .place-card, .history-card, .friend-card, .feed-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card, .friend-card { display: flex; align-items: center; gap: 12px; text-align: left; } .place-card { cursor: pointer; } .number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .grow { flex: 1; min-width: 0; } .arrow { color: #bbbbbb; font-size: 30px; } .history-card h3 { margin: 0; } .rating { display: flex; gap: 4px; margin-top: 14px; font-size: 25px; } .rating .off { filter: grayscale(1); opacity: 0.22; } .tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .actions { margin-top: 12px; } .actions button { flex: 1; } .friend-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 14px 0 20px; } .friend-section { margin-top: 24px; } .friend-section h3 { margin-bottom: 10px; } .avatar { width: 42px; height: 42px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; font-size: 22px; } .friend-actions { display: flex; gap: 6px; } .compact { width: auto; margin: 0; padding: 9px 11px; white-space: nowrap; } .badge { padding: 7px 10px; border-radius: 999px; background: #f0f0f0; color: #666666; font-size: 12px; font-weight: 900; } .badge.accepted { background: #eef8ef; color: #287348; } .feed-person { display: flex; align-items: center; gap: 11px; } .feed-heart { font-size: 22px; } .feed-place { margin: 15px 0 4px; } .feed-date, .feed-google-rating { color: #666666; font-size: 13px; } .feed-rating-text { margin-top: 4px; color: #f97316; font-size: 13px; font-weight: 900; } .feed-card .full { margin-top: 12px; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(20, 15, 10, 0.42); } .dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone.selected { border-color: #f97316; background: #fff0d9; } .cone span { font-size: 27px; } @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } .friend-search { grid-template-columns: 1fr; } .friend-card { align-items: flex-start; flex-wrap: wrap; } .friend-actions { width: 100%; } .friend-actions button { flex: 1; } } `}</style>
   );
 }
 function App() {
@@ -1255,7 +1385,8 @@ function App() {
         <Styles />{" "}
         <section className="panel">
           {" "}
-          <div className="large-logo"> 🍦 </div> <h1> GELATO HUNTER </h1>{" "}
+          <div className="large-logo"> 🍦 </div>{" "}
+          <h1 className="centered"> GELATO HUNTER </h1>{" "}
           <p className="muted centered"> Laster... </p>{" "}
         </section>{" "}
       </main>
