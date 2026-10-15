@@ -6,7 +6,8 @@ import {
   useMapsLibrary,
 } from "@vis.gl/react-google-maps";
 const API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-const VISITS_STORAGE_KEY = "gelato_hunter_web_visits";
+const HISTORY_STORAGE_KEY = "gelato_hunter_history_v1";
+const SEARCH_RADII = [5000, 10000, 25000, 50000];
 function degreesToRadians(degrees) {
   return degrees * (Math.PI / 180);
 }
@@ -17,11 +18,10 @@ function calculateDistance(latitude1, longitude1, latitude2, longitude2) {
   const firstLatitude = degreesToRadians(latitude1);
   const secondLatitude = degreesToRadians(latitude2);
   const haversineValue =
-    Math.sin(latitudeDifference / 2) * Math.sin(latitudeDifference / 2) +
+    Math.sin(latitudeDifference / 2) ** 2 +
     Math.cos(firstLatitude) *
       Math.cos(secondLatitude) *
-      Math.sin(longitudeDifference / 2) *
-      Math.sin(longitudeDifference / 2);
+      Math.sin(longitudeDifference / 2) ** 2;
   const angularDistance =
     2 * Math.atan2(Math.sqrt(haversineValue), Math.sqrt(1 - haversineValue));
   return earthRadiusMetres * angularDistance;
@@ -52,41 +52,52 @@ function formatVisitDate(dateValue) {
   }
   return parts[2] + "." + parts[1] + "." + parts[0];
 }
-function loadSavedVisits() {
+function createId() {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return Date.now().toString() + "-" + Math.random().toString(16).slice(2);
+}
+function loadHistory() {
   try {
-    const savedVisits = window.localStorage.getItem(VISITS_STORAGE_KEY);
-    if (!savedVisits) {
-      return {};
+    const savedHistory = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!savedHistory) {
+      return [];
     }
-    return JSON.parse(savedVisits);
+    const parsedHistory = JSON.parse(savedHistory);
+    return Array.isArray(parsedHistory) ? parsedHistory : [];
   } catch (error) {
-    console.error("Kunne ikke laste besøk:", error);
-    return {};
+    console.error("Kunne ikke laste historikken:", error);
+    return [];
   }
 }
-function saveVisits(visits) {
+function saveHistory(history) {
   try {
-    window.localStorage.setItem(VISITS_STORAGE_KEY, JSON.stringify(visits));
+    window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
     return true;
   } catch (error) {
-    console.error("Kunne ikke lagre besøk:", error);
+    console.error("Kunne ikke lagre historikken:", error);
     return false;
   }
 }
 function GelatoHunter() {
   const placesLibrary = useMapsLibrary("places");
+  const [activeView, setActiveView] = useState("discover");
   const [userPosition, setUserPosition] = useState(null);
   const [places, setPlaces] = useState([]);
-  const [visits, setVisits] = useState(loadSavedVisits);
+  const [history, setHistory] = useState(loadHistory);
   const [selectedPlace, setSelectedPlace] = useState(null);
   const [locationStatus, setLocationStatus] = useState("loading");
   const [placesStatus, setPlacesStatus] = useState("waiting");
-  const [searchRadius, setSearchRadius] = useState(5000);
+  const [searchRadiusIndex, setSearchRadiusIndex] = useState(0);
   const [message, setMessage] = useState("Finner posisjonen din...");
+  const [ratingInput, setRatingInput] = useState(0);
   const [flavourInput, setFlavourInput] = useState("");
   const [visitDateInput, setVisitDateInput] = useState(getTodayDate());
   const [favouriteInput, setFavouriteInput] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [showOnlyFavourites, setShowOnlyFavourites] = useState(false);
+  const searchRadius = SEARCH_RADII[searchRadiusIndex];
   useEffect(() => {
     if (!navigator.geolocation) {
       setLocationStatus("error");
@@ -95,11 +106,10 @@ function GelatoHunter() {
     }
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const coordinates = {
+        setUserPosition({
           lat: position.coords.latitude,
           lng: position.coords.longitude,
-        };
-        setUserPosition(coordinates);
+        });
         setLocationStatus("ready");
         setMessage("Søker etter iskremsteder...");
       },
@@ -152,12 +162,6 @@ function GelatoHunter() {
             typeof place.location.lng === "function"
               ? place.location.lng()
               : place.location.lng;
-          const distanceMetres = calculateDistance(
-            userPosition.lat,
-            userPosition.lng,
-            latitude,
-            longitude,
-          );
           return {
             id: place.id,
             name:
@@ -169,7 +173,12 @@ function GelatoHunter() {
             rating: place.rating || null,
             userRatingCount: place.userRatingCount || null,
             googleMapsURI: place.googleMapsURI || null,
-            distanceMetres: distanceMetres,
+            distanceMetres: calculateDistance(
+              userPosition.lat,
+              userPosition.lng,
+              latitude,
+              longitude,
+            ),
           };
         })
         .sort(
@@ -196,126 +205,90 @@ function GelatoHunter() {
   useEffect(() => {
     findGelatoPlaces();
   }, [findGelatoPlaces]);
-  const selectedVisit = useMemo(() => {
-    if (!selectedPlace) {
-      return null;
-    }
-    return visits[selectedPlace.id] || null;
-  }, [selectedPlace, visits]);
-  const selectedRating = selectedVisit?.rating || 0;
+  const sortedHistory = useMemo(() => {
+    const visibleHistory = showOnlyFavourites
+      ? history.filter((visit) => visit.favourite)
+      : history;
+    return [...visibleHistory].sort((firstVisit, secondVisit) => {
+      const firstDate = firstVisit.visitDate || firstVisit.createdAt;
+      const secondDate = secondVisit.visitDate || secondVisit.createdAt;
+      return String(secondDate).localeCompare(String(firstDate));
+    });
+  }, [history, showOnlyFavourites]);
+  const favouriteCount = useMemo(() => {
+    return history.filter((visit) => visit.favourite).length;
+  }, [history]);
   function openPlace(place) {
-    const savedVisit = visits[place.id];
     setSelectedPlace(place);
-    setFlavourInput(savedVisit?.flavour || "");
-    setVisitDateInput(savedVisit?.visitDate || getTodayDate());
-    setFavouriteInput(savedVisit?.favourite || false);
+    setRatingInput(0);
+    setFlavourInput("");
+    setVisitDateInput(getTodayDate());
+    setFavouriteInput(false);
     setSaveMessage("");
   }
   function closePlace() {
     setSelectedPlace(null);
     setSaveMessage("");
   }
-  function updateVisit(place, updates) {
-    const currentVisit = visits[place.id] || {};
-    const updatedVisit = {
-      placeId: place.id,
-      placeName: place.name,
-      latitude: place.latitude,
-      longitude: place.longitude,
-      rating: currentVisit.rating || 0,
-      flavour: currentVisit.flavour || "",
-      favourite: currentVisit.favourite || false,
-      visitDate: currentVisit.visitDate || "",
-      updatedAt: new Date().toISOString(),
-      ...currentVisit,
-      ...updates,
+  function saveNewVisit() {
+    if (!selectedPlace) {
+      return;
+    }
+    if (ratingInput === 0) {
+      setSaveMessage("Velg 1–5 iskremkjegler før du lagrer.");
+      return;
+    }
+    const newVisit = {
+      id: createId(),
+      placeId: selectedPlace.id,
+      placeName: selectedPlace.name,
+      latitude: selectedPlace.latitude,
+      longitude: selectedPlace.longitude,
+      googleRating: selectedPlace.rating || null,
+      rating: ratingInput,
+      flavour: flavourInput.trim(),
+      favourite: favouriteInput,
+      visitDate: visitDateInput || getTodayDate(),
+      createdAt: new Date().toISOString(),
     };
-    const updatedVisits = { ...visits };
-    updatedVisits[place.id] = updatedVisit;
-    setVisits(updatedVisits);
-    const saved = saveVisits(updatedVisits);
+    const updatedHistory = [...history, newVisit];
+    setHistory(updatedHistory);
+    const saved = saveHistory(updatedHistory);
     if (saved) {
-      setSaveMessage("Opplysningene er lagret");
+      setSaveMessage("Besøket er lagret i Mine gelatoer.");
     } else {
-      setSaveMessage("Opplysningene kunne ikke lagres");
+      setSaveMessage("Besøket kunne ikke lagres.");
     }
   }
-  function ratePlace(place, rating) {
-    updateVisit(place, {
-      rating: rating,
-      flavour: flavourInput.trim(),
-      favourite: favouriteInput,
-      visitDate: visitDateInput,
-    });
+  function deleteHistoryItem(visitId) {
+    const updatedHistory = history.filter((visit) => visit.id !== visitId);
+    setHistory(updatedHistory);
+    saveHistory(updatedHistory);
   }
-  function saveVisitDetails() {
-    if (!selectedPlace) {
-      return;
-    }
-    updateVisit(selectedPlace, {
-      flavour: flavourInput.trim(),
-      favourite: favouriteInput,
-      visitDate: visitDateInput,
+  function toggleHistoryFavourite(visitId) {
+    const updatedHistory = history.map((visit) => {
+      if (visit.id !== visitId) {
+        return visit;
+      }
+      return { ...visit, favourite: !visit.favourite };
     });
-  }
-  function toggleFavourite() {
-    if (!selectedPlace) {
-      return;
-    }
-    const newFavourite = !favouriteInput;
-    setFavouriteInput(newFavourite);
-    updateVisit(selectedPlace, {
-      favourite: newFavourite,
-      flavour: flavourInput.trim(),
-      visitDate: visitDateInput,
-    });
-  }
-  function deleteVisit(placeId) {
-    const updatedVisits = { ...visits };
-    delete updatedVisits[placeId];
-    setVisits(updatedVisits);
-    saveVisits(updatedVisits);
-    setFlavourInput("");
-    setFavouriteInput(false);
-    setVisitDateInput(getTodayDate());
-    setSaveMessage("Besøket er slettet");
+    setHistory(updatedHistory);
+    saveHistory(updatedHistory);
   }
   function increaseSearchRadius() {
-    setSelectedPlace(null);
-    if (searchRadius === 5000) {
-      setSearchRadius(10000);
-      return;
+    if (searchRadiusIndex < SEARCH_RADII.length - 1) {
+      setSearchRadiusIndex(searchRadiusIndex + 1);
     }
-    if (searchRadius === 10000) {
-      setSearchRadius(25000);
-      return;
-    }
-    if (searchRadius === 25000) {
-      setSearchRadius(50000);
-    }
-  }
-  function getNextRadiusLabel() {
-    if (searchRadius === 5000) {
-      return "10 km";
-    }
-    if (searchRadius === 10000) {
-      return "25 km";
-    }
-    if (searchRadius === 25000) {
-      return "50 km";
-    }
-    return "";
   }
   function resetSearchRadius() {
-    setSearchRadius(5000);
-    setSelectedPlace(null);
+    setSearchRadiusIndex(0);
   }
-  function navigateToPlace(place) {
-    if (place.googleMapsURI) {
-      window.open(place.googleMapsURI, "_blank", "noopener,noreferrer");
-      return;
-    }
-    const destination = place.latitude + "," + place.longitude;
+  function getNextRadiusLabel() {
+    const nextRadius = SEARCH_RADII[searchRadiusIndex + 1];
+    return nextRadius ? formatRadius(nextRadius) : "";
+  }
+  function navigateToCoordinates(latitude, longitude) {
+    const destination = latitude + "," + longitude;
     const navigationUrl =
       "https://www.google.com/maps/dir/?api=1" +
       "&destination=" +
@@ -323,26 +296,30 @@ function GelatoHunter() {
       "&travelmode=walking";
     window.open(navigationUrl, "_blank", "noopener,noreferrer");
   }
+  function navigateToPlace(place) {
+    if (place.googleMapsURI) {
+      window.open(place.googleMapsURI, "_blank", "noopener,noreferrer");
+      return;
+    }
+    navigateToCoordinates(place.latitude, place.longitude);
+  }
   if (locationStatus === "loading") {
     return (
-      <main style={styles.loadingPage}>
+      <main className="loading-page">
         {" "}
-        <div style={styles.largeLogo}> 🍦 </div>{" "}
-        <h1 style={styles.loadingTitle}> GELATO HUNTER </h1>{" "}
-        <p style={styles.loadingMessage}> {message} </p>{" "}
+        <AppStyles /> <div className="large-logo"> 🍦 </div>{" "}
+        <h1>GELATO HUNTER</h1> <p>{message}</p>{" "}
       </main>
     );
   }
   if (locationStatus === "error") {
     return (
-      <main style={styles.loadingPage}>
+      <main className="loading-page">
         {" "}
-        <div style={styles.largeLogo}> 📍 </div>{" "}
-        <h1 style={styles.loadingTitle}> GELATO HUNTER </h1>{" "}
-        <p style={styles.errorMessage}> {message} </p>{" "}
+        <AppStyles /> <div className="large-logo"> 📍 </div>{" "}
+        <h1>GELATO HUNTER</h1> <p className="error-message"> {message} </p>{" "}
         <button
-          type="button"
-          style={styles.primaryButton}
+          className="primary-button"
           onClick={() => window.location.reload()}
         >
           {" "}
@@ -352,281 +329,366 @@ function GelatoHunter() {
     );
   }
   return (
-    <main style={styles.app}>
+    <main className="app">
       {" "}
-      <header style={styles.header}>
+      <AppStyles />{" "}
+      <header className="header">
         {" "}
-        <div style={styles.brandLabel}> GELATO HUNTER </div>{" "}
-        <h1 style={styles.heading}> Finn neste kule 🍦 </h1>{" "}
-        <p style={styles.subheading}> Iskremsteder nærmest deg </p>{" "}
+        <div className="brand-label"> GELATO HUNTER </div>{" "}
+        <h1> Finn neste kule 🍦 </h1>{" "}
+        <p> Finn iskrem og bygg din egen gelato-historikk </p>{" "}
+        <nav className="main-navigation">
+          {" "}
+          <button
+            className={
+              activeView === "discover"
+                ? "navigation-button active"
+                : "navigation-button"
+            }
+            onClick={() => setActiveView("discover")}
+          >
+            {" "}
+            📍 Finn iskrem{" "}
+          </button>{" "}
+          <button
+            className={
+              activeView === "history"
+                ? "navigation-button active"
+                : "navigation-button"
+            }
+            onClick={() => setActiveView("history")}
+          >
+            {" "}
+            🍦 Mine gelatoer{" "}
+            {history.length > 0 ? " (" + history.length + ")" : ""}{" "}
+          </button>{" "}
+        </nav>{" "}
       </header>{" "}
-      <section style={styles.mapWrapper}>
-        {" "}
-        <Map
-          defaultCenter={userPosition}
-          defaultZoom={13}
-          gestureHandling="greedy"
-          disableDefaultUI={true}
-          style={styles.map}
-        >
+      {activeView === "discover" && (
+        <>
           {" "}
-          <Marker position={userPosition} title="Du er her" />{" "}
-          {places.map((place) => (
-            <Marker
-              key={place.id}
-              position={{ lat: place.latitude, lng: place.longitude }}
-              title={place.name}
-              onClick={() => openPlace(place)}
-            />
-          ))}{" "}
-        </Map>{" "}
-      </section>{" "}
-      <section style={styles.content}>
-        {" "}
-        <div style={styles.listHeader}>
-          {" "}
-          <div>
+          <section className="map-wrapper">
             {" "}
-            <div style={styles.eyebrow}> NÆRMEST DEG </div>{" "}
-            <h2 style={styles.listTitle}> Iskrem i nærheten </h2>{" "}
-            <div style={styles.radiusLabel}>
-              {" "}
-              Søkeradius: {formatRadius(searchRadius)}{" "}
-            </div>{" "}
-          </div>{" "}
-          <span style={styles.resultCount}> {places.length} steder </span>{" "}
-        </div>{" "}
-        {placesStatus === "loading" && (
-          <div style={styles.statusCard}>
-            {" "}
-            🍦 Søker innen {formatRadius(searchRadius)} ...{" "}
-          </div>
-        )}{" "}
-        {message && placesStatus !== "loading" && (
-          <div style={styles.messageCard}> {message} </div>
-        )}{" "}
-        {placesStatus === "ready" &&
-          places.length === 0 &&
-          searchRadius < 50000 && (
-            <button
-              type="button"
-              style={styles.searchMoreButton}
-              onClick={increaseSearchRadius}
+            <Map
+              defaultCenter={userPosition}
+              defaultZoom={13}
+              gestureHandling="greedy"
+              disableDefaultUI={true}
+              className="map"
             >
               {" "}
-              🍦 Søk innen {getNextRadiusLabel()}{" "}
-            </button>
-          )}{" "}
-        {placesStatus === "ready" &&
-          places.length === 0 &&
-          searchRadius === 50000 && (
-            <div style={styles.maxRadiusCard}>
+              <Marker position={userPosition} title="Du er her" />{" "}
+              {places.map((place) => (
+                <Marker
+                  key={place.id}
+                  position={{ lat: place.latitude, lng: place.longitude }}
+                  title={place.name}
+                  onClick={() => openPlace(place)}
+                />
+              ))}{" "}
+            </Map>{" "}
+          </section>{" "}
+          <section className="content">
+            {" "}
+            <div className="list-header">
               {" "}
-              <strong> Ingen iskremsteder funnet innen 50 km. </strong>{" "}
+              <div>
+                {" "}
+                <div className="eyebrow"> NÆRMEST DEG </div>{" "}
+                <h2> Iskrem i nærheten </h2>{" "}
+                <div className="radius-label">
+                  {" "}
+                  Søkeradius: {formatRadius(searchRadius)}{" "}
+                </div>{" "}
+              </div>{" "}
+              <span className="result-count">
+                {" "}
+                {places.length} steder{" "}
+              </span>{" "}
+            </div>{" "}
+            {placesStatus === "loading" && (
+              <div className="status-card">
+                {" "}
+                🍦 Søker innen {formatRadius(searchRadius)} ...{" "}
+              </div>
+            )}{" "}
+            {message && placesStatus !== "loading" && (
+              <div className="message-card"> {message} </div>
+            )}{" "}
+            {placesStatus === "ready" &&
+              places.length === 0 &&
+              searchRadiusIndex < SEARCH_RADII.length - 1 && (
+                <button
+                  className="search-more-button"
+                  onClick={increaseSearchRadius}
+                >
+                  {" "}
+                  🍦 Søk innen {getNextRadiusLabel()}{" "}
+                </button>
+              )}{" "}
+            {placesStatus === "ready" &&
+              places.length === 0 &&
+              searchRadiusIndex === SEARCH_RADII.length - 1 && (
+                <div className="message-card">
+                  {" "}
+                  <strong> Ingen iskremsteder funnet innen 50 km. </strong>{" "}
+                  <button
+                    className="secondary-button"
+                    onClick={resetSearchRadius}
+                  >
+                    {" "}
+                    Start på nytt med 5 km{" "}
+                  </button>{" "}
+                </div>
+              )}{" "}
+            <div className="place-list">
+              {" "}
+              {places.map((place, index) => {
+                const placeVisits = history.filter(
+                  (visit) => visit.placeId === place.id,
+                );
+                const isFavourite = placeVisits.some(
+                  (visit) => visit.favourite,
+                );
+                return (
+                  <button
+                    key={place.id}
+                    className="place-card"
+                    onClick={() => openPlace(place)}
+                  >
+                    {" "}
+                    <div className="place-number"> {index + 1} </div>{" "}
+                    <div className="place-info">
+                      {" "}
+                      <strong>
+                        {" "}
+                        {place.name} {isFavourite ? " ❤️" : ""}{" "}
+                      </strong>{" "}
+                      <div className="metadata">
+                        {" "}
+                        <span className="distance">
+                          {" "}
+                          📍 {formatDistance(place.distanceMetres)}{" "}
+                        </span>{" "}
+                        {place.rating && (
+                          <span> Google {place.rating} ⭐ </span>
+                        )}{" "}
+                      </div>{" "}
+                      {placeVisits.length > 0 && (
+                        <div className="visit-count">
+                          {" "}
+                          {placeVisits.length} registrerte besøk{" "}
+                        </div>
+                      )}{" "}
+                    </div>{" "}
+                    <span className="arrow"> › </span>{" "}
+                  </button>
+                );
+              })}{" "}
+            </div>{" "}
+          </section>{" "}
+        </>
+      )}{" "}
+      {activeView === "history" && (
+        <section className="content">
+          {" "}
+          <div className="history-heading">
+            {" "}
+            <div>
+              {" "}
+              <div className="eyebrow"> DIN HISTORIKK </div>{" "}
+              <h2> Mine gelatoer 🍦 </h2>{" "}
+              <p>
+                {" "}
+                {history.length} registrerte besøk og {favouriteCount}{" "}
+                favoritter{" "}
+              </p>{" "}
+            </div>{" "}
+            <button
+              className={
+                showOnlyFavourites ? "filter-button active" : "filter-button"
+              }
+              onClick={() => setShowOnlyFavourites(!showOnlyFavourites)}
+            >
+              {" "}
+              ❤️ {showOnlyFavourites ? "Vis alle" : "Kun favoritter"}{" "}
+            </button>{" "}
+          </div>{" "}
+          {sortedHistory.length === 0 && (
+            <div className="empty-history">
+              {" "}
+              <div className="large-logo"> 🍦 </div>{" "}
+              <h3> Ingen registrerte besøk </h3>{" "}
+              <p> Finn et iskremsted og registrer din første smak. </p>{" "}
               <button
-                type="button"
-                style={styles.resetButton}
-                onClick={resetSearchRadius}
+                className="primary-button"
+                onClick={() => setActiveView("discover")}
               >
                 {" "}
-                Start nytt søk på 5 km{" "}
+                Finn iskrem{" "}
               </button>{" "}
             </div>
           )}{" "}
-        <div style={styles.placeList}>
-          {" "}
-          {places.map((place, index) => {
-            const visit = visits[place.id];
-            return (
-              <button
-                key={place.id}
-                type="button"
-                style={styles.placeCard}
-                onClick={() => openPlace(place)}
-              >
+          <div className="history-list">
+            {" "}
+            {sortedHistory.map((visit) => (
+              <article key={visit.id} className="history-card">
                 {" "}
-                <div style={styles.placeNumber}> {index + 1} </div>{" "}
-                <div style={styles.placeInfo}>
+                <div className="history-card-heading">
                   {" "}
-                  <strong style={styles.placeName}>
+                  <div>
                     {" "}
-                    {place.name} {visit?.favourite ? " ❤️" : ""}{" "}
-                  </strong>{" "}
-                  <div style={styles.placeMetadata}>
-                    {" "}
-                    <span style={styles.distance}>
+                    <h3> {visit.placeName} </h3>{" "}
+                    <div className="visit-date">
                       {" "}
-                      📍 {formatDistance(place.distanceMetres)}{" "}
-                    </span>{" "}
-                    {place.rating && (
-                      <span> Google {place.rating} ⭐ </span>
-                    )}{" "}
+                      📅 {formatVisitDate(visit.visitDate)}{" "}
+                    </div>{" "}
                   </div>{" "}
-                  {visit?.rating > 0 && (
-                    <div style={styles.personalRating}>
-                      {" "}
-                      Din vurdering: {visit.rating} av 5 🍦{" "}
-                    </div>
-                  )}{" "}
-                  {visit?.flavour && (
-                    <div style={styles.visitDetail}>
-                      {" "}
-                      Smak: {visit.flavour}{" "}
-                    </div>
-                  )}{" "}
-                  {visit?.visitDate && (
-                    <div style={styles.visitDetail}>
-                      {" "}
-                      Besøkt: {formatVisitDate(visit.visitDate)}{" "}
-                    </div>
-                  )}{" "}
+                  <button
+                    className={
+                      visit.favourite ? "heart-button active" : "heart-button"
+                    }
+                    onClick={() => toggleHistoryFavourite(visit.id)}
+                    aria-label="Endre favoritt"
+                  >
+                    {" "}
+                    {visit.favourite ? "❤️" : "♡"}{" "}
+                  </button>{" "}
                 </div>{" "}
-                <span style={styles.arrow}> › </span>{" "}
-              </button>
-            );
-          })}{" "}
-        </div>{" "}
-      </section>{" "}
+                <div className="history-rating">
+                  {" "}
+                  {[1, 2, 3, 4, 5].map((number) => (
+                    <span
+                      key={number}
+                      className={
+                        number <= visit.rating
+                          ? "history-cone active"
+                          : "history-cone"
+                      }
+                    >
+                      {" "}
+                      🍦{" "}
+                    </span>
+                  ))}{" "}
+                </div>{" "}
+                <div className="history-rating-text">
+                  {" "}
+                  {visit.rating} av 5{" "}
+                </div>{" "}
+                {visit.flavour && (
+                  <div className="flavour-tag"> Smak: {visit.flavour} </div>
+                )}{" "}
+                <div className="history-actions">
+                  {" "}
+                  {visit.latitude && visit.longitude && (
+                    <button
+                      className="small-navigation-button"
+                      onClick={() =>
+                        navigateToCoordinates(visit.latitude, visit.longitude)
+                      }
+                    >
+                      {" "}
+                      🧭 Naviger{" "}
+                    </button>
+                  )}{" "}
+                  <button
+                    className="delete-history-button"
+                    onClick={() => deleteHistoryItem(visit.id)}
+                  >
+                    {" "}
+                    Slett besøk{" "}
+                  </button>{" "}
+                </div>{" "}
+              </article>
+            ))}{" "}
+          </div>{" "}
+        </section>
+      )}{" "}
       {selectedPlace && (
-        <div style={styles.overlay} onClick={closePlace}>
+        <div className="overlay" onClick={closePlace}>
           {" "}
           <section
-            style={styles.placeDialog}
+            className="place-dialog"
             onClick={(event) => event.stopPropagation()}
           >
             {" "}
             <button
-              type="button"
-              aria-label="Lukk"
-              style={styles.closeButton}
+              className="close-button"
               onClick={closePlace}
+              aria-label="Lukk"
             >
               {" "}
               ×{" "}
             </button>{" "}
-            <div style={styles.dialogHeadingRow}>
-              {" "}
-              <h2 style={styles.dialogTitle}> {selectedPlace.name} </h2>{" "}
-              <button
-                type="button"
-                aria-label={
-                  favouriteInput ? "Fjern favoritt" : "Legg til favoritt"
-                }
-                style={{
-                  ...styles.favouriteButton,
-                  ...(favouriteInput ? styles.favouriteButtonActive : {}),
-                }}
-                onClick={toggleFavourite}
-              >
-                {" "}
-                {favouriteInput ? "❤️" : "♡"}{" "}
-              </button>{" "}
-            </div>{" "}
-            <div style={styles.dialogMeta}>
+            <h2> {selectedPlace.name} </h2>{" "}
+            <div className="dialog-meta">
               {" "}
               📍 {formatDistance(selectedPlace.distanceMetres)} unna{" "}
             </div>{" "}
             {selectedPlace.rating && (
-              <div style={styles.dialogMeta}>
+              <div className="dialog-meta">
                 {" "}
                 Google: {selectedPlace.rating} ⭐{" "}
               </div>
             )}{" "}
             <button
-              type="button"
-              style={styles.navigateButton}
+              className="navigate-button"
               onClick={() => navigateToPlace(selectedPlace)}
             >
               {" "}
               🧭 Naviger hit{" "}
             </button>{" "}
-            <h3 style={styles.ratingTitle}> Din Gelato Hunter-rating </h3>{" "}
-            <div style={styles.cones}>
+            <h3> Registrer nytt besøk </h3>{" "}
+            <label className="field-label"> Din rating </label>{" "}
+            <div className="cones">
               {" "}
-              {[1, 2, 3, 4, 5].map((number) => {
-                const isSelected = number <= selectedRating;
-                return (
-                  <button
-                    key={number}
-                    type="button"
-                    aria-label={"Gi " + number + " av 5"}
-                    style={{
-                      ...styles.coneButton,
-                      ...(isSelected ? styles.coneButtonSelected : {}),
-                    }}
-                    onClick={() => ratePlace(selectedPlace, number)}
-                  >
-                    {" "}
-                    <span style={styles.cone}> 🍦 </span>{" "}
-                    <span
-                      style={{
-                        ...styles.coneNumber,
-                        ...(isSelected ? styles.coneNumberSelected : {}),
-                      }}
-                    >
-                      {" "}
-                      {number}{" "}
-                    </span>{" "}
-                  </button>
-                );
-              })}{" "}
-            </div>{" "}
-            <div style={styles.formSection}>
-              {" "}
-              <label style={styles.fieldLabel}> Smak du prøvde </label>{" "}
-              <input
-                type="text"
-                value={flavourInput}
-                maxLength={60}
-                placeholder="For eksempel pistasj"
-                style={styles.textInput}
-                onChange={(event) => setFlavourInput(event.target.value)}
-              />{" "}
-              <label style={styles.fieldLabel}> Besøksdato </label>{" "}
-              <input
-                type="date"
-                value={visitDateInput}
-                max={getTodayDate()}
-                style={styles.textInput}
-                onChange={(event) => setVisitDateInput(event.target.value)}
-              />{" "}
-              <button
-                type="button"
-                style={styles.saveButton}
-                onClick={saveVisitDetails}
-              >
-                {" "}
-                Lagre smak og besøksdato{" "}
-              </button>{" "}
-            </div>{" "}
-            <div style={styles.ratingResult}>
-              {" "}
-              {saveMessage ? (
-                <strong style={styles.savedText}> ✓ {saveMessage} </strong>
-              ) : selectedVisit ? (
-                <strong style={styles.savedText}>
+              {[1, 2, 3, 4, 5].map((number) => (
+                <button
+                  key={number}
+                  className={
+                    number <= ratingInput
+                      ? "cone-button selected"
+                      : "cone-button"
+                  }
+                  onClick={() => setRatingInput(number)}
+                >
                   {" "}
-                  Lagret{" "}
-                  {selectedRating
-                    ? ": " + selectedRating + " av 5 🍦"
-                    : ""}{" "}
-                </strong>
-              ) : (
-                <span style={styles.helpText}>
-                  {" "}
-                  Velg rating og legg inn besøksdetaljer{" "}
-                </span>
-              )}{" "}
+                  <span> 🍦 </span> <small> {number} </small>{" "}
+                </button>
+              ))}{" "}
             </div>{" "}
-            {selectedVisit && (
-              <button
-                type="button"
-                style={styles.deleteButton}
-                onClick={() => deleteVisit(selectedPlace.id)}
-              >
-                {" "}
-                Slett besøksdata{" "}
-              </button>
+            <label className="field-label"> Smak du prøvde </label>{" "}
+            <input
+              type="text"
+              className="text-input"
+              value={flavourInput}
+              maxLength={60}
+              placeholder="For eksempel pistasj"
+              onChange={(event) => setFlavourInput(event.target.value)}
+            />{" "}
+            <label className="field-label"> Besøksdato </label>{" "}
+            <input
+              type="date"
+              className="text-input"
+              value={visitDateInput}
+              max={getTodayDate()}
+              onChange={(event) => setVisitDateInput(event.target.value)}
+            />{" "}
+            <button
+              className={
+                favouriteInput ? "favourite-toggle active" : "favourite-toggle"
+              }
+              onClick={() => setFavouriteInput(!favouriteInput)}
+            >
+              {" "}
+              {favouriteInput ? "❤️ Favoritt" : "♡ Marker som favoritt"}{" "}
+            </button>{" "}
+            <button className="save-visit-button" onClick={saveNewVisit}>
+              {" "}
+              Lagre besøket{" "}
+            </button>{" "}
+            {saveMessage && (
+              <div className="save-message"> {saveMessage} </div>
             )}{" "}
           </section>{" "}
         </div>
@@ -634,17 +696,22 @@ function GelatoHunter() {
     </main>
   );
 }
+function AppStyles() {
+  return (
+    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .loading-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .loading-page { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; } .loading-page h1 { color: #f97316; } .large-logo { font-size: 80px; } .error-message { color: #aa3333; } .header { max-width: 820px; margin: 0 auto; padding: 28px 18px 16px; } .header h1 { margin: 5px 0 0; font-size: 36px; } .header p { color: #666666; } .brand-label, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .main-navigation { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 20px; } .navigation-button { padding: 12px; border: 2px solid #eedfce; border-radius: 14px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .navigation-button.active { border-color: #f97316; background: #fff0d9; color: #d85f08; } .map-wrapper { max-width: 820px; height: 42vh; min-height: 320px; max-height: 480px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 25px; } .content { max-width: 820px; margin: 0 auto; padding: 20px 12px 50px; } .list-header, .history-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 15px; margin-bottom: 12px; padding: 0 5px; } .list-header h2, .history-heading h2 { margin: 4px 0; } .radius-label, .result-count, .visit-date { color: #777777; font-size: 13px; } .status-card, .message-card, .empty-history { margin-bottom: 14px; padding: 18px; border-radius: 16px; background: #ffffff; text-align: center; } .search-more-button, .primary-button, .navigate-button, .save-visit-button { width: 100%; padding: 13px 16px; border: 0; border-radius: 14px; background: #f97316; color: #ffffff; font-weight: 900; cursor: pointer; } .secondary-button { display: block; margin: 14px auto 0; padding: 10px 14px; border: 2px solid #f97316; border-radius: 12px; background: #ffffff; color: #f97316; font-weight: 800; cursor: pointer; } .place-list, .history-list { display: grid; gap: 10px; } .place-card, .history-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; box-shadow: 0 3px 12px rgba(50, 30, 10, 0.06); } .place-card { display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer; } .place-number { width: 38px; height: 38px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .place-info { flex: 1; min-width: 0; } .metadata { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 5px; color: #666666; font-size: 13px; } .distance { color: #e8650c; font-weight: 800; } .visit-count { margin-top: 6px; color: #d65e00; font-size: 12px; font-weight: 800; } .arrow { color: #bbbbbb; font-size: 30px; } .filter-button { padding: 10px 13px; border: 2px solid #eedfce; border-radius: 12px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .filter-button.active { border-color: #f97316; background: #fff0d9; } .history-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; } .history-card h3 { margin: 0 0 5px; } .heart-button { width: 45px; height: 42px; border: 2px solid #dddddd; border-radius: 13px; background: #f7f7f7; font-size: 24px; cursor: pointer; } .heart-button.active { border-color: #f97316; background: #fff0d9; } .history-rating { display: flex; gap: 5px; margin-top: 14px; } .history-cone { font-size: 25px; filter: grayscale(1); opacity: 0.25; } .history-cone.active { filter: none; opacity: 1; } .history-rating-text { margin-top: 5px; color: #f97316; font-size: 13px; font-weight: 900; } .flavour-tag { display: inline-block; margin-top: 10px; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #984b0c; font-size: 13px; font-weight: 800; } .history-actions { display: flex; gap: 8px; margin-top: 14px; } .small-navigation-button, .delete-history-button { flex: 1; padding: 10px; border-radius: 11px; font-weight: 800; cursor: pointer; } .small-navigation-button { border: 0; background: #f97316; color: #ffffff; } .delete-history-button { border: 2px solid #dcb8b8; background: #ffffff; color: #aa3333; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; overflow-y: auto; background: rgba(20, 15, 10, 0.42); } .place-dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; } .place-dialog h2 { margin: 0; padding-right: 40px; } .close-button { position: absolute; top: 7px; right: 9px; width: 42px; height: 42px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .dialog-meta { margin-top: 6px; color: #666666; font-size: 14px; } .navigate-button { margin-top: 14px; } .field-label { display: block; margin: 16px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .cones { display: grid; grid-template-columns: repeat( 5, minmax(0, 1fr) ); gap: 7px; } .cone-button { min-width: 0; height: 72px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 14px; background: #f4f4f4; cursor: pointer; } .cone-button.selected { border-color: #f97316; background: #fff0d9; } .cone-button span { font-size: 28px; } .cone-button small { margin-top: 2px; color: #777777; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #222222; font-size: 16px; } .favourite-toggle { width: 100%; margin-top: 15px; padding: 12px; border: 2px solid #dddddd; border-radius: 13px; background: #f7f7f7; color: #555555; font-weight: 900; cursor: pointer; } .favourite-toggle.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .save-visit-button { margin-top: 12px; background: #2e7d4f; } .save-message { margin-top: 12px; padding: 11px; border-radius: 11px; background: #fff8ed; color: #d65e00; font-size: 13px; font-weight: 900; text-align: center; } @media (max-width: 520px) { .header h1 { font-size: 30px; } .history-heading { align-items: stretch; flex-direction: column; } .main-navigation { grid-template-columns: 1fr; } } `}</style>
+  );
+}
 function App() {
   if (!API_KEY) {
     return (
-      <main style={styles.loadingPage}>
+      <main className="loading-page">
         {" "}
-        <div style={styles.largeLogo}> 🍦 </div>{" "}
-        <h1 style={styles.loadingTitle}> GELATO HUNTER </h1>{" "}
-        <p style={styles.errorMessage}>
+        <AppStyles /> <div className="large-logo"> 🍦 </div>{" "}
+        <h1>GELATO HUNTER</h1>{" "}
+        <p className="error-message">
           {" "}
-          Google Maps API-nøkkel mangler. Kontroller miljøvariabelen
-          VITE_GOOGLE_MAPS_API_KEY.{" "}
+          Google Maps API-nøkkel mangler. Kontroller VITE_GOOGLE_MAPS_API_KEY i
+          miljøvariablene.{" "}
         </p>{" "}
       </main>
     );
@@ -656,312 +723,4 @@ function App() {
     </APIProvider>
   );
 }
-const styles = {
-  app: {
-    minHeight: "100vh",
-    background: "#FFFAF1",
-    color: "#202020",
-    fontFamily: "Arial, Helvetica, sans-serif",
-  },
-  header: { maxWidth: 820, margin: "0 auto", padding: "28px 18px 18px" },
-  brandLabel: {
-    color: "#F97316",
-    fontSize: 12,
-    fontWeight: 900,
-    letterSpacing: 3,
-  },
-  heading: { margin: "5px 0 0", fontSize: 36, lineHeight: 1.05 },
-  subheading: { margin: "8px 0 0", color: "#666666" },
-  mapWrapper: {
-    maxWidth: 820,
-    height: "42vh",
-    minHeight: 320,
-    maxHeight: 480,
-    margin: "0 auto",
-    padding: "0 12px",
-    boxSizing: "border-box",
-  },
-  map: { width: "100%", height: "100%", borderRadius: 26, overflow: "hidden" },
-  content: { maxWidth: 820, margin: "0 auto", padding: "20px 12px 50px" },
-  listHeader: {
-    display: "flex",
-    alignItems: "end",
-    justifyContent: "space-between",
-    gap: 16,
-    padding: "0 5px 10px",
-  },
-  eyebrow: {
-    color: "#F97316",
-    fontSize: 11,
-    fontWeight: 900,
-    letterSpacing: 1.5,
-  },
-  listTitle: { margin: "3px 0 0", fontSize: 23 },
-  radiusLabel: { color: "#888888", fontSize: 12, marginTop: 4 },
-  resultCount: { color: "#777777", fontSize: 13 },
-  statusCard: {
-    marginBottom: 12,
-    padding: 15,
-    borderRadius: 14,
-    background: "#FFFFFF",
-    textAlign: "center",
-    color: "#666666",
-  },
-  messageCard: {
-    marginBottom: 12,
-    padding: 15,
-    borderRadius: 14,
-    background: "#FFF3E4",
-    color: "#8A460D",
-    textAlign: "center",
-  },
-  searchMoreButton: {
-    width: "100%",
-    marginBottom: 14,
-    padding: "14px 18px",
-    border: 0,
-    borderRadius: 14,
-    background: "#F97316",
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: 900,
-    cursor: "pointer",
-  },
-  maxRadiusCard: {
-    marginBottom: 14,
-    padding: 18,
-    borderRadius: 16,
-    background: "#FFFFFF",
-    color: "#444444",
-    textAlign: "center",
-  },
-  resetButton: {
-    display: "block",
-    margin: "14px auto 0",
-    padding: "10px 16px",
-    border: "2px solid #F97316",
-    borderRadius: 12,
-    background: "#FFFFFF",
-    color: "#F97316",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-  placeList: { display: "grid", gap: 10 },
-  placeCard: {
-    width: "100%",
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    padding: 13,
-    border: "1px solid #EEE3D4",
-    borderRadius: 17,
-    background: "#FFFFFF",
-    color: "#202020",
-    font: "inherit",
-    textAlign: "left",
-    cursor: "pointer",
-  },
-  placeNumber: {
-    width: 38,
-    height: 38,
-    flexShrink: 0,
-    display: "grid",
-    placeItems: "center",
-    borderRadius: "50%",
-    background: "#FFF0D9",
-    color: "#F97316",
-    fontWeight: 900,
-  },
-  placeInfo: { flex: 1, minWidth: 0 },
-  placeName: {
-    display: "block",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-    fontSize: 16,
-  },
-  placeMetadata: {
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 12,
-    marginTop: 5,
-    color: "#666666",
-    fontSize: 13,
-  },
-  distance: { color: "#E8650C", fontWeight: 800 },
-  personalRating: {
-    marginTop: 6,
-    color: "#D65E00",
-    fontSize: 12,
-    fontWeight: 800,
-  },
-  visitDetail: { marginTop: 3, color: "#666666", fontSize: 12 },
-  arrow: { color: "#BBBBBB", fontSize: 30 },
-  overlay: {
-    position: "fixed",
-    inset: 0,
-    zIndex: 1000,
-    display: "flex",
-    alignItems: "flex-end",
-    justifyContent: "center",
-    padding: 12,
-    boxSizing: "border-box",
-    overflowY: "auto",
-    background: "rgba(20, 15, 10, 0.38)",
-  },
-  placeDialog: {
-    position: "relative",
-    width: "min(540px, 100%)",
-    maxHeight: "92vh",
-    overflowY: "auto",
-    boxSizing: "border-box",
-    padding: "24px 18px 18px",
-    borderRadius: 24,
-    background: "#FFFFFF",
-  },
-  closeButton: {
-    position: "absolute",
-    top: 8,
-    right: 10,
-    width: 42,
-    height: 42,
-    border: 0,
-    background: "transparent",
-    color: "#777777",
-    fontSize: 30,
-    cursor: "pointer",
-  },
-  dialogHeadingRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    paddingRight: 40,
-  },
-  dialogTitle: { flex: 1, margin: 0, fontSize: 23 },
-  favouriteButton: {
-    width: 48,
-    height: 44,
-    flexShrink: 0,
-    border: "2px solid #E2E2E2",
-    borderRadius: 14,
-    background: "#F6F6F6",
-    fontSize: 25,
-    cursor: "pointer",
-  },
-  favouriteButtonActive: { borderColor: "#F97316", background: "#FFF0D9" },
-  dialogMeta: { marginTop: 5, color: "#666666", fontSize: 14 },
-  navigateButton: {
-    width: "100%",
-    marginTop: 15,
-    padding: "13px 16px",
-    border: 0,
-    borderRadius: 14,
-    background: "#F97316",
-    color: "#FFFFFF",
-    fontSize: 16,
-    fontWeight: 900,
-    cursor: "pointer",
-  },
-  ratingTitle: { margin: "18px 0 10px", fontSize: 15 },
-  cones: {
-    display: "grid",
-    gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
-    gap: 7,
-  },
-  coneButton: {
-    minWidth: 0,
-    height: 74,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    border: "2px solid #DDDDDD",
-    borderRadius: 14,
-    background: "#F4F4F4",
-    cursor: "pointer",
-  },
-  coneButtonSelected: { borderColor: "#F97316", background: "#FFF0D9" },
-  cone: { fontSize: 29 },
-  coneNumber: { marginTop: 2, color: "#999999", fontSize: 13, fontWeight: 900 },
-  coneNumberSelected: { color: "#F97316" },
-  formSection: {
-    display: "grid",
-    gap: 8,
-    marginTop: 17,
-    padding: 14,
-    borderRadius: 15,
-    background: "#FFF8ED",
-  },
-  fieldLabel: { marginTop: 3, color: "#444444", fontSize: 13, fontWeight: 800 },
-  textInput: {
-    width: "100%",
-    boxSizing: "border-box",
-    padding: "12px 13px",
-    border: "2px solid #E8DED1",
-    borderRadius: 12,
-    background: "#FFFFFF",
-    color: "#222222",
-    fontSize: 16,
-  },
-  saveButton: {
-    width: "100%",
-    marginTop: 5,
-    padding: "12px 14px",
-    border: 0,
-    borderRadius: 12,
-    background: "#2E7D4F",
-    color: "#FFFFFF",
-    fontSize: 15,
-    fontWeight: 900,
-    cursor: "pointer",
-  },
-  ratingResult: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 12,
-    padding: 11,
-    borderRadius: 11,
-    background: "#FFF8ED",
-  },
-  savedText: { color: "#F97316", textAlign: "center" },
-  helpText: { color: "#777777", fontSize: 13, textAlign: "center" },
-  deleteButton: {
-    display: "block",
-    margin: "10px auto 0",
-    padding: 8,
-    border: 0,
-    background: "transparent",
-    color: "#AA3333",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-  loadingPage: {
-    minHeight: "100vh",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    boxSizing: "border-box",
-    padding: 30,
-    background: "#FFFAF1",
-    fontFamily: "Arial, Helvetica, sans-serif",
-    textAlign: "center",
-  },
-  largeLogo: { fontSize: 82 },
-  loadingTitle: { margin: "12px 0 24px", color: "#F97316", fontSize: 30 },
-  loadingMessage: { marginTop: 20, color: "#666666" },
-  errorMessage: { maxWidth: 440, color: "#AA3333", lineHeight: 1.5 },
-  primaryButton: {
-    marginTop: 18,
-    padding: "12px 22px",
-    border: 0,
-    borderRadius: 13,
-    background: "#F97316",
-    color: "#FFFFFF",
-    fontWeight: 900,
-    cursor: "pointer",
-  },
-};
 export default App;
