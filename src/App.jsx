@@ -415,7 +415,7 @@ function FriendsScreen({ session }) {
     setErrorMessage("");
     const result = await supabase
       .from("friendships")
-      .select("id,requester_id,addressee_id,status,created_at,")
+      .select("id,requester_id,addressee_id,status,created_at")
       .or(
         "requester_id.eq." +
           currentUserId +
