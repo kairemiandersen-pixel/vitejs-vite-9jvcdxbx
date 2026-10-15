@@ -52,38 +52,21 @@ function formatVisitDate(dateValue) {
   }
   return parts[2] + "." + parts[1] + "." + parts[0];
 }
-function createId() {
-  if (window.crypto && typeof window.crypto.randomUUID === "function") {
-    return window.crypto.randomUUID();
-  }
-  return Date.now().toString() + "-" + Math.random().toString(16).slice(2);
-}
-function getHistoryStorageKey(userId) {
-  return "gelato_hunter_history_" + userId;
-}
-function loadHistory(userId) {
-  try {
-    const storageKey = getHistoryStorageKey(userId);
-    const savedHistory = window.localStorage.getItem(storageKey);
-    if (!savedHistory) {
-      return [];
-    }
-    const parsedHistory = JSON.parse(savedHistory);
-    return Array.isArray(parsedHistory) ? parsedHistory : [];
-  } catch (error) {
-    console.error("Kunne ikke laste historikken:", error);
-    return [];
-  }
-}
-function saveHistory(userId, history) {
-  try {
-    const storageKey = getHistoryStorageKey(userId);
-    window.localStorage.setItem(storageKey, JSON.stringify(history));
-    return true;
-  } catch (error) {
-    console.error("Kunne ikke lagre historikken:", error);
-    return false;
-  }
+function normaliseVisit(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    placeId: row.place_id,
+    placeName: row.place_name,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    googleRating: row.google_rating,
+    flavour: row.flavour || "",
+    rating: row.rating,
+    favourite: row.favourite,
+    visitDate: row.visit_date,
+    createdAt: row.created_at,
+  };
 }
 function AuthScreen() {
   const [authMode, setAuthMode] = useState("login");
@@ -105,12 +88,16 @@ function AuthScreen() {
       setAuthError("Passordet må ha minst 6 tegn.");
       return;
     }
+    if (authMode === "signup" && !displayName.trim()) {
+      setAuthError("Skriv inn visningsnavnet ditt.");
+      return;
+    }
     setAuthLoading(true);
     try {
       if (authMode === "signup") {
         const { data, error } = await supabase.auth.signUp({
           email: email.trim(),
-          password: password,
+          password,
           options: {
             data: { display_name: displayName.trim() },
             emailRedirectTo: window.location.origin,
@@ -123,13 +110,13 @@ function AuthScreen() {
           setAuthMessage("Kontoen er opprettet.");
         } else {
           setAuthMessage(
-            "Kontoen er opprettet. Kontroller e-posten din og bekreft kontoen før du logger inn.",
+            "Kontoen er opprettet. Kontroller e-posten din før du logger inn.",
           );
         }
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email: email.trim(),
-          password: password,
+          password,
         });
         if (error) {
           throw error;
@@ -174,8 +161,8 @@ function AuthScreen() {
         </h1>{" "}
         <p className="auth-intro">
           {" "}
-          Logg inn for å bygge din gelato-historikk og senere dele
-          iskremopplevelser med venner.{" "}
+          Logg inn for å bygge din gelato-historikk og dele iskremopplevelser
+          med venner.{" "}
         </p>{" "}
         <form onSubmit={handleSubmit}>
           {" "}
@@ -260,7 +247,9 @@ function GelatoHunter({ session }) {
   const [activeView, setActiveView] = useState("discover");
   const [userPosition, setUserPosition] = useState(null);
   const [places, setPlaces] = useState([]);
-  const [history, setHistory] = useState(() => loadHistory(user.id));
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState("");
   const [selectedPlace, setSelectedPlace] = useState(null);
   const [locationStatus, setLocationStatus] = useState("loading");
   const [placesStatus, setPlacesStatus] = useState("waiting");
@@ -271,12 +260,33 @@ function GelatoHunter({ session }) {
   const [visitDateInput, setVisitDateInput] = useState(getTodayDate());
   const [favouriteInput, setFavouriteInput] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
+  const [savingVisit, setSavingVisit] = useState(false);
   const [showOnlyFavourites, setShowOnlyFavourites] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const searchRadius = SEARCH_RADII[searchRadiusIndex];
-  useEffect(() => {
-    setHistory(loadHistory(user.id));
+  const loadVisitsFromSupabase = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError("");
+    const { data, error } = await supabase
+      .from("gelato_visits")
+      .select(
+        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at",
+      )
+      .eq("user_id", user.id)
+      .order("visit_date", { ascending: false })
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("Kunne ikke hente besøk:", error);
+      setHistoryError("Gelato-historikken kunne ikke lastes.");
+      setHistoryLoading(false);
+      return;
+    }
+    setHistory((data || []).map(normaliseVisit));
+    setHistoryLoading(false);
   }, [user.id]);
+  useEffect(() => {
+    loadVisitsFromSupabase();
+  }, [loadVisitsFromSupabase]);
   useEffect(() => {
     if (!navigator.geolocation) {
       setLocationStatus("error");
@@ -385,11 +395,11 @@ function GelatoHunter({ session }) {
     const visibleHistory = showOnlyFavourites
       ? history.filter((visit) => visit.favourite)
       : history;
-    return [...visibleHistory].sort((firstVisit, secondVisit) =>
-      String(secondVisit.visitDate || secondVisit.createdAt).localeCompare(
-        String(firstVisit.visitDate || firstVisit.createdAt),
-      ),
-    );
+    return [...visibleHistory].sort((firstVisit, secondVisit) => {
+      const firstDate = firstVisit.visitDate || firstVisit.createdAt;
+      const secondDate = secondVisit.visitDate || secondVisit.createdAt;
+      return String(secondDate).localeCompare(String(firstDate));
+    });
   }, [history, showOnlyFavourites]);
   const favouriteCount = history.filter((visit) => visit.favourite).length;
   function openPlace(place) {
@@ -404,7 +414,7 @@ function GelatoHunter({ session }) {
     setSelectedPlace(null);
     setSaveMessage("");
   }
-  function saveNewVisit() {
+  async function saveNewVisit() {
     if (!selectedPlace) {
       return;
     }
@@ -412,48 +422,90 @@ function GelatoHunter({ session }) {
       setSaveMessage("Velg 1–5 iskremkjegler før du lagrer.");
       return;
     }
-    const newVisit = {
-      id: createId(),
-      userId: user.id,
-      placeId: selectedPlace.id,
-      placeName: selectedPlace.name,
+    setSavingVisit(true);
+    setSaveMessage("");
+    const visitRow = {
+      user_id: user.id,
+      place_id: selectedPlace.id,
+      place_name: selectedPlace.name,
       latitude: selectedPlace.latitude,
       longitude: selectedPlace.longitude,
-      googleRating: selectedPlace.rating || null,
+      google_rating: selectedPlace.rating || null,
+      flavour: flavourInput.trim() || null,
       rating: ratingInput,
-      flavour: flavourInput.trim(),
       favourite: favouriteInput,
-      visitDate: visitDateInput || getTodayDate(),
-      createdAt: new Date().toISOString(),
+      visit_date: visitDateInput || getTodayDate(),
     };
-    const updatedHistory = [...history, newVisit];
-    setHistory(updatedHistory);
-    const saved = saveHistory(user.id, updatedHistory);
-    setSaveMessage(
-      saved
-        ? "Besøket er lagret i Mine gelatoer."
-        : "Besøket kunne ikke lagres.",
+    const { data, error } = await supabase
+      .from("gelato_visits")
+      .insert(visitRow)
+      .select(
+        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at",
+      )
+      .single();
+    setSavingVisit(false);
+    if (error) {
+      console.error("Kunne ikke lagre besøk:", error);
+      setSaveMessage("Besøket kunne ikke lagres: " + error.message);
+      return;
+    }
+    const newVisit = normaliseVisit(data);
+    setHistory((currentHistory) => [newVisit, ...currentHistory]);
+    setSaveMessage("Besøket er lagret i Mine gelatoer.");
+    setRatingInput(0);
+    setFlavourInput("");
+    setFavouriteInput(false);
+    setVisitDateInput(getTodayDate());
+  }
+  async function deleteHistoryItem(visitId) {
+    const confirmed = window.confirm("Vil du slette dette besøket?");
+    if (!confirmed) {
+      return;
+    }
+    const { error } = await supabase
+      .from("gelato_visits")
+      .delete()
+      .eq("id", visitId)
+      .eq("user_id", user.id);
+    if (error) {
+      console.error("Kunne ikke slette besøk:", error);
+      setHistoryError("Besøket kunne ikke slettes.");
+      return;
+    }
+    setHistory((currentHistory) =>
+      currentHistory.filter((visit) => visit.id !== visitId),
     );
   }
-  function deleteHistoryItem(visitId) {
-    const updatedHistory = history.filter((visit) => visit.id !== visitId);
-    setHistory(updatedHistory);
-    saveHistory(user.id, updatedHistory);
-  }
-  function toggleFavourite(visitId) {
-    const updatedHistory = history.map((visit) => {
-      if (visit.id !== visitId) {
-        return visit;
-      }
-      return { ...visit, favourite: !visit.favourite };
-    });
-    setHistory(updatedHistory);
-    saveHistory(user.id, updatedHistory);
+  async function toggleFavourite(visit) {
+    const newFavourite = !visit.favourite;
+    const { data, error } = await supabase
+      .from("gelato_visits")
+      .update({ favourite: newFavourite })
+      .eq("id", visit.id)
+      .eq("user_id", user.id)
+      .select(
+        "id,user_id,place_id,place_name,latitude,longitude,google_rating,flavour,rating,favourite,visit_date,created_at",
+      )
+      .single();
+    if (error) {
+      console.error("Kunne ikke endre favoritt:", error);
+      setHistoryError("Favoritten kunne ikke oppdateres.");
+      return;
+    }
+    const updatedVisit = normaliseVisit(data);
+    setHistory((currentHistory) =>
+      currentHistory.map((historyVisit) =>
+        historyVisit.id === updatedVisit.id ? updatedVisit : historyVisit,
+      ),
+    );
   }
   function increaseSearchRadius() {
     if (searchRadiusIndex < SEARCH_RADII.length - 1) {
       setSearchRadiusIndex(searchRadiusIndex + 1);
     }
+  }
+  function resetSearchRadius() {
+    setSearchRadiusIndex(0);
   }
   function navigateToCoordinates(latitude, longitude) {
     const destination = latitude + "," + longitude;
@@ -463,6 +515,13 @@ function GelatoHunter({ session }) {
       encodeURIComponent(destination) +
       "&travelmode=walking";
     window.open(navigationUrl, "_blank", "noopener,noreferrer");
+  }
+  function navigateToPlace(place) {
+    if (place.googleMapsURI) {
+      window.open(place.googleMapsURI, "_blank", "noopener,noreferrer");
+      return;
+    }
+    navigateToCoordinates(place.latitude, place.longitude);
   }
   async function handleSignOut() {
     setSigningOut(true);
@@ -478,6 +537,22 @@ function GelatoHunter({ session }) {
         {" "}
         <AppStyles /> <div className="large-logo"> 🍦 </div>{" "}
         <h1> GELATO HUNTER </h1> <p>{message}</p>{" "}
+      </main>
+    );
+  }
+  if (locationStatus === "error") {
+    return (
+      <main className="loading-page">
+        {" "}
+        <AppStyles /> <div className="large-logo"> 📍 </div>{" "}
+        <h1> GELATO HUNTER </h1> <p className="error-message"> {message} </p>{" "}
+        <button
+          className="primary-button"
+          onClick={() => window.location.reload()}
+        >
+          {" "}
+          Prøv igjen{" "}
+        </button>{" "}
       </main>
     );
   }
@@ -522,7 +597,10 @@ function GelatoHunter({ session }) {
                 ? "navigation-button active"
                 : "navigation-button"
             }
-            onClick={() => setActiveView("history")}
+            onClick={() => {
+              setActiveView("history");
+              loadVisitsFromSupabase();
+            }}
           >
             {" "}
             🍦 Mine gelatoer{" "}
@@ -588,30 +666,62 @@ function GelatoHunter({ session }) {
                   {formatRadius(SEARCH_RADII[searchRadiusIndex + 1])}{" "}
                 </button>
               )}{" "}
+            {placesStatus === "ready" &&
+              places.length === 0 &&
+              searchRadiusIndex === SEARCH_RADII.length - 1 && (
+                <div className="message-card">
+                  {" "}
+                  <strong> Ingen iskremsteder funnet innen 50 km. </strong>{" "}
+                  <button
+                    className="secondary-button"
+                    onClick={resetSearchRadius}
+                  >
+                    {" "}
+                    Start på nytt med 5 km{" "}
+                  </button>{" "}
+                </div>
+              )}{" "}
             <div className="place-list">
               {" "}
-              {places.map((place, index) => (
-                <button
-                  key={place.id}
-                  className="place-card"
-                  onClick={() => openPlace(place)}
-                >
-                  {" "}
-                  <div className="place-number"> {index + 1} </div>{" "}
-                  <div className="place-info">
+              {places.map((place, index) => {
+                const placeVisits = history.filter(
+                  (visit) => visit.placeId === place.id,
+                );
+                const isFavourite = placeVisits.some(
+                  (visit) => visit.favourite,
+                );
+                return (
+                  <button
+                    key={place.id}
+                    className="place-card"
+                    onClick={() => openPlace(place)}
+                  >
                     {" "}
-                    <strong> {place.name} </strong>{" "}
-                    <div className="metadata">
+                    <div className="place-number"> {index + 1} </div>{" "}
+                    <div className="place-info">
                       {" "}
-                      📍 {formatDistance(place.distanceMetres)}{" "}
-                      {place.rating
-                        ? " · Google " + place.rating + " ⭐"
-                        : ""}{" "}
+                      <strong>
+                        {" "}
+                        {place.name} {isFavourite ? " ❤️" : ""}{" "}
+                      </strong>{" "}
+                      <div className="metadata">
+                        {" "}
+                        📍 {formatDistance(place.distanceMetres)}{" "}
+                        {place.rating
+                          ? " · Google " + place.rating + " ⭐"
+                          : ""}{" "}
+                      </div>{" "}
+                      {placeVisits.length > 0 && (
+                        <div className="visit-count">
+                          {" "}
+                          {placeVisits.length} registrerte besøk{" "}
+                        </div>
+                      )}{" "}
                     </div>{" "}
-                  </div>{" "}
-                  <span className="arrow"> › </span>{" "}
-                </button>
-              ))}{" "}
+                    <span className="arrow"> › </span>{" "}
+                  </button>
+                );
+              })}{" "}
             </div>{" "}
           </section>{" "}
         </>
@@ -631,14 +741,32 @@ function GelatoHunter({ session }) {
               </p>{" "}
             </div>{" "}
             <button
-              className="filter-button"
+              className={
+                showOnlyFavourites ? "filter-button active" : "filter-button"
+              }
               onClick={() => setShowOnlyFavourites(!showOnlyFavourites)}
             >
               {" "}
               {showOnlyFavourites ? "Vis alle" : "❤️ Favoritter"}{" "}
             </button>{" "}
           </div>{" "}
-          {sortedHistory.length === 0 && (
+          {historyLoading && (
+            <div className="message-card"> Laster gelato-historikken... </div>
+          )}{" "}
+          {historyError && (
+            <div className="error-card">
+              {" "}
+              {historyError}{" "}
+              <button
+                className="secondary-button"
+                onClick={loadVisitsFromSupabase}
+              >
+                {" "}
+                Prøv igjen{" "}
+              </button>{" "}
+            </div>
+          )}{" "}
+          {!historyLoading && !historyError && sortedHistory.length === 0 && (
             <div className="message-card">
               {" "}
               Ingen registrerte gelatobesøk ennå.{" "}
@@ -657,8 +785,11 @@ function GelatoHunter({ session }) {
                     <small> 📅 {formatVisitDate(visit.visitDate)} </small>{" "}
                   </div>{" "}
                   <button
-                    className="heart-button"
-                    onClick={() => toggleFavourite(visit.id)}
+                    className={
+                      visit.favourite ? "heart-button active" : "heart-button"
+                    }
+                    onClick={() => toggleFavourite(visit)}
+                    aria-label="Endre favoritt"
                   >
                     {" "}
                     {visit.favourite ? "❤️" : "♡"}{" "}
@@ -678,20 +809,23 @@ function GelatoHunter({ session }) {
                     </span>
                   ))}{" "}
                 </div>{" "}
+                <div className="rating-text"> {visit.rating} av 5 </div>{" "}
                 {visit.flavour && (
                   <div className="flavour-tag"> Smak: {visit.flavour} </div>
                 )}{" "}
                 <div className="history-actions">
                   {" "}
-                  <button
-                    className="small-navigation-button"
-                    onClick={() =>
-                      navigateToCoordinates(visit.latitude, visit.longitude)
-                    }
-                  >
-                    {" "}
-                    🧭 Naviger{" "}
-                  </button>{" "}
+                  {visit.latitude && visit.longitude && (
+                    <button
+                      className="small-navigation-button"
+                      onClick={() =>
+                        navigateToCoordinates(visit.latitude, visit.longitude)
+                      }
+                    >
+                      {" "}
+                      🧭 Naviger{" "}
+                    </button>
+                  )}{" "}
                   <button
                     className="delete-button"
                     onClick={() => deleteHistoryItem(visit.id)}
@@ -713,20 +847,20 @@ function GelatoHunter({ session }) {
             onClick={(event) => event.stopPropagation()}
           >
             {" "}
-            <button className="close-button" onClick={closePlace}>
+            <button
+              className="close-button"
+              onClick={closePlace}
+              aria-label="Lukk"
+            >
               {" "}
               ×{" "}
             </button>{" "}
             <h2> {selectedPlace.name} </h2>{" "}
             <p> 📍 {formatDistance(selectedPlace.distanceMetres)} unna </p>{" "}
+            {selectedPlace.rating && <p> Google: {selectedPlace.rating} ⭐ </p>}{" "}
             <button
               className="primary-button"
-              onClick={() =>
-                navigateToCoordinates(
-                  selectedPlace.latitude,
-                  selectedPlace.longitude,
-                )
-              }
+              onClick={() => navigateToPlace(selectedPlace)}
             >
               {" "}
               🧭 Naviger hit{" "}
@@ -753,6 +887,7 @@ function GelatoHunter({ session }) {
             <input
               className="text-input"
               value={flavourInput}
+              maxLength={100}
               placeholder="For eksempel pistasj"
               onChange={(event) => setFlavourInput(event.target.value)}
             />{" "}
@@ -773,9 +908,13 @@ function GelatoHunter({ session }) {
               {" "}
               {favouriteInput ? "❤️ Favoritt" : "♡ Marker som favoritt"}{" "}
             </button>{" "}
-            <button className="save-button" onClick={saveNewVisit}>
+            <button
+              className="save-button"
+              onClick={saveNewVisit}
+              disabled={savingVisit}
+            >
               {" "}
-              Lagre besøket{" "}
+              {savingVisit ? "Lagrer..." : "Lagre besøket"}{" "}
             </button>{" "}
             {saveMessage && (
               <div className="save-message"> {saveMessage} </div>
@@ -788,7 +927,7 @@ function GelatoHunter({ session }) {
 }
 function AppStyles() {
   return (
-    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .loading-page, .auth-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .loading-page, .auth-page { display: flex; align-items: center; justify-content: center; padding: 24px; } .large-logo { font-size: 80px; } .error-message { color: #aa3333; } .auth-card { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .auth-logo { font-size: 65px; text-align: center; } .auth-card h1 { margin: 8px 0; text-align: center; } .auth-card .brand-label { text-align: center; } .auth-intro { color: #666666; line-height: 1.5; text-align: center; } .field-label, .place-dialog label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder { color: #999999; opacity: 1; } .auth-submit, .save-button { width: 100%; margin-top: 18px; padding: 13px; border: 0; border-radius: 13px; background: #2e7d4f; color: #ffffff; font-weight: 900; cursor: pointer; } .auth-submit:disabled { opacity: 0.65; } .text-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .auth-switch { margin-top: 18px; color: #666666; text-align: center; } .auth-switch .text-button { margin-left: 5px; } .auth-error, .auth-success, .save-message { margin-top: 14px; padding: 11px; border-radius: 11px; font-size: 13px; font-weight: 800; text-align: center; } .auth-error { background: #fff0f0; color: #a32222; } .auth-success, .save-message { background: #eef8ef; color: #287348; } .header { max-width: 820px; margin: 0 auto; padding: 26px 16px 14px; } .top-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; } .header h1 { margin: 4px 0; } .header p { margin: 5px 0; color: #666666; } .brand-label, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .logout-button { padding: 9px 12px; border: 2px solid #e7d7c5; border-radius: 11px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .main-navigation { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 17px; } .navigation-button { padding: 11px 8px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .navigation-button.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .navigation-button:disabled { opacity: 0.5; } .map-wrapper { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .content { max-width: 820px; margin: 0 auto; padding: 20px 12px 50px; } .list-header, .history-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; } .place-list, .history-list { display: grid; gap: 10px; } .place-card, .history-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card { display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer; } .place-number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .place-info { flex: 1; } .metadata { margin-top: 5px; color: #666666; font-size: 13px; } .arrow { color: #bbbbbb; font-size: 30px; } .message-card { margin-bottom: 12px; padding: 15px; border-radius: 14px; background: #ffffff; color: #202020; text-align: center; } .primary-button { width: 100%; padding: 13px; border: 0; border-radius: 13px; background: #f97316; color: #ffffff; font-weight: 900; cursor: pointer; } .filter-button { padding: 9px 12px; border: 2px solid #f97316; border-radius: 12px; background: #ffffff; color: #d65e00; font-weight: 800; cursor: pointer; } .history-title-row, .history-actions { display: flex; justify-content: space-between; gap: 10px; } .history-card h3 { margin: 0; } .history-rating { display: flex; gap: 4px; margin-top: 14px; } .active-cone { font-size: 25px; } .inactive-cone { font-size: 25px; filter: grayscale(1); opacity: 0.22; } .flavour-tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart-button { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .small-navigation-button, .delete-button { flex: 1; padding: 10px; border-radius: 11px; font-weight: 800; cursor: pointer; } .small-navigation-button { border: 0; background: #f97316; color: #ffffff; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(20, 15, 10, 0.42); } .place-dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close-button { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone-button { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone-button.selected { border-color: #f97316; background: #fff0d9; } .cone-button span { font-size: 27px; } .favourite-toggle { width: 100%; margin-top: 14px; padding: 11px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-weight: 800; cursor: pointer; } .favourite-toggle.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } @media ( max-width: 560px ) { .main-navigation { grid-template-columns: 1fr; } .history-heading, .top-row { flex-direction: column; } .logout-button { align-self: flex-start; } } `}</style>
+    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .loading-page, .auth-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .loading-page, .auth-page { display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; } .large-logo { font-size: 80px; } .error-message { color: #aa3333; } .auth-card { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .auth-logo { font-size: 65px; text-align: center; } .auth-card h1 { margin: 8px 0; text-align: center; } .auth-card .brand-label { text-align: center; } .auth-intro { color: #666666; line-height: 1.5; text-align: center; } .field-label, .place-dialog label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder { color: #999999; opacity: 1; } .auth-submit, .save-button { width: 100%; margin-top: 18px; padding: 13px; border: 0; border-radius: 13px; background: #2e7d4f; color: #ffffff; font-weight: 900; cursor: pointer; } .auth-submit:disabled, .save-button:disabled { opacity: 0.65; cursor: default; } .text-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .auth-switch { margin-top: 18px; color: #666666; text-align: center; } .auth-switch .text-button { margin-left: 5px; } .auth-error, .auth-success, .save-message { margin-top: 14px; padding: 11px; border-radius: 11px; font-size: 13px; font-weight: 800; text-align: center; } .auth-error { background: #fff0f0; color: #a32222; } .auth-success, .save-message { background: #eef8ef; color: #287348; } .header { max-width: 820px; margin: 0 auto; padding: 26px 16px 14px; } .top-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; } .header h1 { margin: 4px 0; } .header p { margin: 5px 0; color: #666666; } .brand-label, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .logout-button { padding: 9px 12px; border: 2px solid #e7d7c5; border-radius: 11px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .main-navigation { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 17px; } .navigation-button { padding: 11px 8px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .navigation-button.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .navigation-button:disabled { opacity: 0.5; cursor: default; } .map-wrapper { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .content { max-width: 820px; margin: 0 auto; padding: 20px 12px 50px; } .list-header, .history-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; } .place-list, .history-list { display: grid; gap: 10px; } .place-card, .history-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card { display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer; } .place-number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .place-info { flex: 1; } .metadata { margin-top: 5px; color: #666666; font-size: 13px; } .visit-count { margin-top: 6px; color: #d65e00; font-size: 12px; font-weight: 800; } .arrow { color: #bbbbbb; font-size: 30px; } .message-card, .error-card { margin-bottom: 12px; padding: 15px; border-radius: 14px; background: #ffffff; color: #202020; text-align: center; } .error-card { background: #fff0f0; color: #a32222; } .primary-button { width: 100%; padding: 13px; border: 0; border-radius: 13px; background: #f97316; color: #ffffff; font-weight: 900; cursor: pointer; } .secondary-button { display: block; margin: 12px auto 0; padding: 9px 13px; border: 2px solid #f97316; border-radius: 11px; background: #ffffff; color: #d65e00; font-weight: 800; cursor: pointer; } .filter-button { padding: 9px 12px; border: 2px solid #f97316; border-radius: 12px; background: #ffffff; color: #d65e00; font-weight: 800; cursor: pointer; } .filter-button.active { background: #fff0d9; } .history-title-row, .history-actions { display: flex; justify-content: space-between; gap: 10px; } .history-card h3 { margin: 0; } .history-rating { display: flex; gap: 4px; margin-top: 14px; } .active-cone { font-size: 25px; } .inactive-cone { font-size: 25px; filter: grayscale(1); opacity: 0.22; } .rating-text { margin-top: 5px; color: #f97316; font-size: 13px; font-weight: 900; } .flavour-tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart-button { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .heart-button.active { border-color: #f97316; background: #fff0d9; } .small-navigation-button, .delete-button { flex: 1; padding: 10px; border-radius: 11px; font-weight: 800; cursor: pointer; } .small-navigation-button { border: 0; background: #f97316; color: #ffffff; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; overflow-y: auto; background: rgba(20, 15, 10, 0.42); } .place-dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close-button { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone-button { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone-button.selected { border-color: #f97316; background: #fff0d9; } .cone-button span { font-size: 27px; } .favourite-toggle { width: 100%; margin-top: 14px; padding: 11px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-weight: 800; cursor: pointer; } .favourite-toggle.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } @media ( max-width: 560px ) { .main-navigation { grid-template-columns: 1fr; } .history-heading, .top-row { flex-direction: column; } .logout-button { align-self: flex-start; } } `}</style>
   );
 }
 function App() {
