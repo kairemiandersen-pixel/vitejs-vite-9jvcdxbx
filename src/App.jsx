@@ -153,7 +153,7 @@ function AuthScreen() {
               <input
                 className="text-input"
                 value={displayName}
-                placeholder="Kai Remi"
+                placeholder="Ditt Navn"
                 onChange={(event) => setDisplayName(event.target.value)}
               />{" "}
             </>
@@ -213,10 +213,7 @@ function AuthScreen() {
   );
 }
 function ProfileScreen({ session, profile, onSaved }) {
-  const user = session.user;
-  const [displayName, setDisplayName] = useState(
-    profile?.display_name || user.user_metadata?.display_name || "",
-  );
+  const [ displayName, setDisplayName, ] = useState( profile?.display_name || '' );
   const [username, setUsername] = useState(profile?.username || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -275,7 +272,7 @@ function ProfileScreen({ session, profile, onSaved }) {
             className="text-input"
             value={displayName}
             maxLength={40}
-            placeholder="Kai Remi"
+            placeholder="Ditt Navn"
             onChange={(event) => setDisplayName(event.target.value)}
           />{" "}
           <label>Brukernavn</label>{" "}
