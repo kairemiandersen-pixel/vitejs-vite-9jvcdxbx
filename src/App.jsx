@@ -313,6 +313,468 @@ function ProfileScreen({ session, profile, onSaved }) {
     </main>
   );
 }
+function FriendsScreen({ session, profile }) {
+  const currentUserId = session.user.id;
+  const [searchText, setSearchText] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [incomingRequests, setIncomingRequests] = useState([]);
+  const [outgoingRequests, setOutgoingRequests] = useState([]);
+  const [friends, setFriends] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  useEffect(() => {
+    loadFriendData();
+  }, []);
+  async function getProfilesByIds(ids) {
+    const uniqueIds = [...new Set(ids.filter(Boolean))];
+    if (uniqueIds.length === 0) {
+      return [];
+    }
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id,display_name,username")
+      .in("id", uniqueIds);
+    if (error) {
+      throw error;
+    }
+    return data || [];
+  }
+  async function loadFriendData() {
+    setLoading(true);
+    setErrorMessage("");
+    const { data, error } = await supabase
+      .from("friendships")
+      .select("id,requester_id,addressee_id,status,created_at")
+      .or(
+        "requester_id.eq." +
+          currentUserId +
+          ",addressee_id.eq." +
+          currentUserId,
+      )
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("Kunne ikke hente venner:", error);
+      setErrorMessage("Vennedata kunne ikke lastes: " + error.message);
+      setLoading(false);
+      return;
+    }
+    const friendshipRows = data || [];
+    const profileIds = friendshipRows.flatMap((friendship) => [
+      friendship.requester_id,
+      friendship.addressee_id,
+    ]);
+    try {
+      const profiles = await getProfilesByIds(profileIds);
+      const profileMap = Object.fromEntries(
+        profiles.map((profileItem) => [profileItem.id, profileItem]),
+      );
+      const incoming = friendshipRows
+        .filter(
+          (friendship) =>
+            friendship.status === "pending" &&
+            friendship.addressee_id === currentUserId,
+        )
+        .map((friendship) => ({
+          ...friendship,
+          person: profileMap[friendship.requester_id],
+        }));
+      const outgoing = friendshipRows
+        .filter(
+          (friendship) =>
+            friendship.status === "pending" &&
+            friendship.requester_id === currentUserId,
+        )
+        .map((friendship) => ({
+          ...friendship,
+          person: profileMap[friendship.addressee_id],
+        }));
+      const accepted = friendshipRows
+        .filter((friendship) => friendship.status === "accepted")
+        .map((friendship) => {
+          const friendId =
+            friendship.requester_id === currentUserId
+              ? friendship.addressee_id
+              : friendship.requester_id;
+          return { ...friendship, person: profileMap[friendId] };
+        });
+      setIncomingRequests(incoming);
+      setOutgoingRequests(outgoing);
+      setFriends(accepted);
+    } catch (profileError) {
+      console.error("Kunne ikke hente profiler:", profileError);
+      setErrorMessage("Venneprofilene kunne ikke lastes.");
+    }
+    setLoading(false);
+  }
+  async function searchUsers(event) {
+    event.preventDefault();
+    setSearching(true);
+    setMessage("");
+    setErrorMessage("");
+    setSearchResults([]);
+    const cleanUsername = searchText.trim().toLowerCase().replace(/^@/, "");
+    if (cleanUsername.length < 3) {
+      setErrorMessage("Skriv minst 3 tegn i brukernavnet.");
+      setSearching(false);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id,display_name,username")
+      .ilike("username", "%" + cleanUsername + "%")
+      .neq("id", currentUserId)
+      .limit(10);
+    if (error) {
+      console.error("Brukersøk feilet:", error);
+      setErrorMessage("Søket kunne ikke utføres: " + error.message);
+      setSearching(false);
+      return;
+    }
+    setSearchResults(data || []);
+    if (!data || data.length === 0) {
+      setMessage("Ingen brukere funnet.");
+    }
+    setSearching(false);
+  }
+  function getRelationship(personId) {
+    const accepted = friends.find(
+      (friendship) => friendship.person?.id === personId,
+    );
+    if (accepted) {
+      return { type: "accepted", friendship: accepted };
+    }
+    const outgoing = outgoingRequests.find(
+      (friendship) => friendship.person?.id === personId,
+    );
+    if (outgoing) {
+      return { type: "outgoing", friendship: outgoing };
+    }
+    const incoming = incomingRequests.find(
+      (friendship) => friendship.person?.id === personId,
+    );
+    if (incoming) {
+      return { type: "incoming", friendship: incoming };
+    }
+    return null;
+  }
+  async function sendFriendRequest(person) {
+    setMessage("");
+    setErrorMessage("");
+    const relationship = getRelationship(person.id);
+    if (relationship) {
+      if (relationship.type === "accepted") {
+        setMessage("@" + person.username + " er allerede en venn.");
+      } else {
+        setMessage("Det finnes allerede en ventende forespørsel.");
+      }
+      return;
+    }
+    const { data: existingRows, error: existingError } = await supabase
+      .from("friendships")
+      .select("id,status,requester_id,addressee_id")
+      .or(
+        "and(requester_id.eq." +
+          currentUserId +
+          ",addressee_id.eq." +
+          person.id +
+          "),and(requester_id.eq." +
+          person.id +
+          ",addressee_id.eq." +
+          currentUserId +
+          ")",
+      );
+    if (existingError) {
+      setErrorMessage("Kunne ikke kontrollere eksisterende vennskap.");
+      return;
+    }
+    if (existingRows && existingRows.length > 0) {
+      setMessage("Det finnes allerede et vennskap eller en forespørsel.");
+      await loadFriendData();
+      return;
+    }
+    const { error } = await supabase
+      .from("friendships")
+      .insert({
+        requester_id: currentUserId,
+        addressee_id: person.id,
+        status: "pending",
+      });
+    if (error) {
+      console.error("Kunne ikke sende forespørsel:", error);
+      setErrorMessage("Forespørselen kunne ikke sendes: " + error.message);
+      return;
+    }
+    setMessage("Venneforespørsel sendt til @" + person.username + ".");
+    await loadFriendData();
+  }
+  async function acceptRequest(friendship) {
+    setMessage("");
+    setErrorMessage("");
+    const { error } = await supabase
+      .from("friendships")
+      .update({ status: "accepted" })
+      .eq("id", friendship.id)
+      .eq("addressee_id", currentUserId);
+    if (error) {
+      console.error("Kunne ikke godta forespørsel:", error);
+      setErrorMessage("Forespørselen kunne ikke godtas: " + error.message);
+      return;
+    }
+    setMessage("Du og @" + friendship.person.username + " er nå venner.");
+    await loadFriendData();
+  }
+  async function deleteFriendship(friendship, successText) {
+    setMessage("");
+    setErrorMessage("");
+    const { error } = await supabase
+      .from("friendships")
+      .delete()
+      .eq("id", friendship.id);
+    if (error) {
+      console.error("Kunne ikke slette vennskap:", error);
+      setErrorMessage("Handlingen kunne ikke gjennomføres: " + error.message);
+      return;
+    }
+    setMessage(successText);
+    await loadFriendData();
+  }
+  return (
+    <section className="content">
+      {" "}
+      <div className="section-head">
+        {" "}
+        <div>
+          {" "}
+          <div className="eyebrow"> VENNEOMRÅDE </div> <h2> Venner 👥 </h2>{" "}
+          <p className="muted">
+            {" "}
+            Finn andre Gelato Hunters med brukernavn.{" "}
+          </p>{" "}
+        </div>{" "}
+        <button className="white-button" type="button" onClick={loadFriendData}>
+          {" "}
+          Oppdater{" "}
+        </button>{" "}
+      </div>{" "}
+      <form className="friend-search" onSubmit={searchUsers}>
+        {" "}
+        <div className="username-row">
+          {" "}
+          <span> @ </span>{" "}
+          <input
+            value={searchText}
+            placeholder="brukernavn"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(event) =>
+              setSearchText(
+                event.target.value.toLowerCase().replace(/[^a-z0-9_@]/g, ""),
+              )
+            }
+          />{" "}
+        </div>{" "}
+        <button className="orange-button" type="submit" disabled={searching}>
+          {" "}
+          {searching ? "Søker..." : "Finn venner"}{" "}
+        </button>{" "}
+      </form>{" "}
+      {errorMessage && <div className="error-box"> {errorMessage} </div>}{" "}
+      {message && <div className="success-box"> {message} </div>}{" "}
+      {searchResults.length > 0 && (
+        <div className="friend-section">
+          {" "}
+          <h3> Søkeresultater </h3>{" "}
+          <div className="list">
+            {" "}
+            {searchResults.map((person) => {
+              const relationship = getRelationship(person.id);
+              return (
+                <article className="friend-card" key={person.id}>
+                  {" "}
+                  <div className="avatar"> 👤 </div>{" "}
+                  <div className="grow">
+                    {" "}
+                    <strong>
+                      {" "}
+                      {person.display_name || person.username}{" "}
+                    </strong>{" "}
+                    <div className="muted"> @{person.username} </div>{" "}
+                  </div>{" "}
+                  {!relationship && (
+                    <button
+                      className="orange-button compact"
+                      type="button"
+                      onClick={() => sendFriendRequest(person)}
+                    >
+                      {" "}
+                      Legg til{" "}
+                    </button>
+                  )}{" "}
+                  {relationship?.type === "accepted" && (
+                    <span className="status-badge accepted"> Venner </span>
+                  )}{" "}
+                  {relationship?.type === "outgoing" && (
+                    <span className="status-badge"> Sendt </span>
+                  )}{" "}
+                  {relationship?.type === "incoming" && (
+                    <button
+                      className="green-button compact"
+                      type="button"
+                      onClick={() => acceptRequest(relationship.friendship)}
+                    >
+                      {" "}
+                      Godta{" "}
+                    </button>
+                  )}{" "}
+                </article>
+              );
+            })}{" "}
+          </div>{" "}
+        </div>
+      )}{" "}
+      {loading && <div className="message"> Laster vennedata... </div>}{" "}
+      {!loading && incomingRequests.length > 0 && (
+        <div className="friend-section">
+          {" "}
+          <h3> Venneforespørsler </h3>{" "}
+          <div className="list">
+            {" "}
+            {incomingRequests.map((friendship) => (
+              <article className="friend-card" key={friendship.id}>
+                {" "}
+                <div className="avatar"> 👋 </div>{" "}
+                <div className="grow">
+                  {" "}
+                  <strong>
+                    {" "}
+                    {friendship.person?.display_name ||
+                      friendship.person?.username}{" "}
+                  </strong>{" "}
+                  <div className="muted">
+                    {" "}
+                    @ {friendship.person?.username}{" "}
+                  </div>{" "}
+                </div>{" "}
+                <div className="friend-actions">
+                  {" "}
+                  <button
+                    className="green-button compact"
+                    type="button"
+                    onClick={() => acceptRequest(friendship)}
+                  >
+                    {" "}
+                    Godta{" "}
+                  </button>{" "}
+                  <button
+                    className="delete-button compact"
+                    type="button"
+                    onClick={() =>
+                      deleteFriendship(friendship, "Forespørselen er avslått.")
+                    }
+                  >
+                    {" "}
+                    Avslå{" "}
+                  </button>{" "}
+                </div>{" "}
+              </article>
+            ))}{" "}
+          </div>{" "}
+        </div>
+      )}{" "}
+      {!loading && outgoingRequests.length > 0 && (
+        <div className="friend-section">
+          {" "}
+          <h3> Sendte forespørsler </h3>{" "}
+          <div className="list">
+            {" "}
+            {outgoingRequests.map((friendship) => (
+              <article className="friend-card" key={friendship.id}>
+                {" "}
+                <div className="avatar"> 📤 </div>{" "}
+                <div className="grow">
+                  {" "}
+                  <strong>
+                    {" "}
+                    {friendship.person?.display_name ||
+                      friendship.person?.username}{" "}
+                  </strong>{" "}
+                  <div className="muted">
+                    {" "}
+                    @ {friendship.person?.username}{" "}
+                  </div>{" "}
+                </div>{" "}
+                <button
+                  className="delete-button compact"
+                  type="button"
+                  onClick={() =>
+                    deleteFriendship(
+                      friendship,
+                      "Forespørselen er trukket tilbake.",
+                    )
+                  }
+                >
+                  {" "}
+                  Trekk tilbake{" "}
+                </button>{" "}
+              </article>
+            ))}{" "}
+          </div>{" "}
+        </div>
+      )}{" "}
+      {!loading && (
+        <div className="friend-section">
+          {" "}
+          <h3> Mine venner ({friends.length}) </h3>{" "}
+          {friends.length === 0 && (
+            <div className="message">
+              {" "}
+              Du har ingen venner registrert ennå.{" "}
+            </div>
+          )}{" "}
+          <div className="list">
+            {" "}
+            {friends.map((friendship) => (
+              <article className="friend-card" key={friendship.id}>
+                {" "}
+                <div className="avatar"> 🍦 </div>{" "}
+                <div className="grow">
+                  {" "}
+                  <strong>
+                    {" "}
+                    {friendship.person?.display_name ||
+                      friendship.person?.username}{" "}
+                  </strong>{" "}
+                  <div className="muted">
+                    {" "}
+                    @ {friendship.person?.username}{" "}
+                  </div>{" "}
+                </div>{" "}
+                <button
+                  className="delete-button compact"
+                  type="button"
+                  onClick={() => {
+                    const confirmed = window.confirm(
+                      "Vil du fjerne denne vennen?",
+                    );
+                    if (confirmed) {
+                      deleteFriendship(friendship, "Vennen er fjernet.");
+                    }
+                  }}
+                >
+                  {" "}
+                  Fjern{" "}
+                </button>{" "}
+              </article>
+            ))}{" "}
+          </div>{" "}
+        </div>
+      )}{" "}
+    </section>
+  );
+}
 function GelatoHunter({ session, profile }) {
   const placesLibrary = useMapsLibrary("places");
   const user = session.user;
@@ -553,10 +1015,14 @@ function GelatoHunter({ session, profile }) {
             🍦 Mine gelatoer{" "}
             {history.length ? " (" + history.length + ")" : ""}{" "}
           </button>{" "}
-          <button className="tab" disabled>
-            {" "}
-            👥 Venner{" "}
-          </button>{" "}
+          <button
+  className={view === "friends" ? "tab active" : "tab"}
+  onClick={() => setView("friends")}
+>
+  {" "}
+  👥 Venner{" "}
+</button>;
+{" "}
         </nav>{" "}
       </header>{" "}
       {view === "discover" && (
@@ -725,6 +1191,7 @@ function GelatoHunter({ session, profile }) {
           </div>{" "}
         </section>
       )}{" "}
+      {view === 'friends' && ( <FriendsScreen session={session} profile={profile} /> )}
       {selectedPlace && (
         <div className="overlay" onClick={() => setSelectedPlace(null)}>
           {" "}
@@ -806,7 +1273,7 @@ function GelatoHunter({ session, profile }) {
 }
 function Styles() {
   return (
-    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .center-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .center-page { display: flex; align-items: center; justify-content: center; padding: 24px; } .panel { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .large-logo { font-size: 65px; text-align: center; } .brand, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .panel .brand, .panel h1, .panel > .muted { text-align: center; } label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder, .username-row input::placeholder { color: #999999; opacity: 1; } .username-row { display: flex; align-items: center; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; } .username-row span { padding-left: 13px; color: #f97316; font-size: 18px; font-weight: 900; } .username-row input { width: 100%; padding: 12px 13px 12px 4px; border: 0; outline: 0; background: #ffffff; color: #202020; } .preview-box, .message, .error-box, .success-box { margin-top: 12px; padding: 12px; border-radius: 11px; text-align: center; } .preview-box, .message { background: #fff0d9; color: #94470c; } .error-box { background: #fff0f0; color: #a32222; } .success-box { background: #eef8ef; color: #287348; } .green-button, .orange-button, .white-button, .delete-button { padding: 12px 14px; border-radius: 12px; font-weight: 900; cursor: pointer; } .green-button { width: 100%; margin-top: 16px; border: 0; background: #2e7d4f; color: #ffffff; } .orange-button { border: 0; background: #f97316; color: #ffffff; } .white-button { border: 2px solid #e7d7c5; background: #ffffff; color: #555555; } .white-button.full, .white-button.favourite { width: 100%; margin-top: 14px; } .white-button.favourite { border-color: #f97316; background: #fff0d9; color: #d65e00; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .link-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .switch-row { margin-top: 18px; color: #666666; text-align: center; } .switch-row .link-button { margin-left: 5px; } .muted { color: #666666; } .header, .content { max-width: 820px; margin: 0 auto; padding: 20px 14px; } .top-row, .section-head, .actions { display: flex; justify-content: space-between; gap: 12px; } .header nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 17px; } .tab { padding: 11px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .tab.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .tab:disabled { opacity: 0.5; } .map-wrap { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .list { display: grid; gap: 10px; margin-top: 12px; } .place-card, .history-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card { display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer; } .number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .grow { flex: 1; } .arrow { color: #bbbbbb; font-size: 30px; } .history-card h3 { margin: 0; } .rating { display: flex; gap: 4px; margin-top: 14px; font-size: 25px; } .rating .off { filter: grayscale(1); opacity: 0.22; } .tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .actions { margin-top: 12px; } .actions button { flex: 1; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(20, 15, 10, 0.42); } .dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone.selected { border-color: #f97316; background: #fff0d9; } .cone span { font-size: 27px; } @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } } `}</style>
+    <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .center-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .center-page { display: flex; align-items: center; justify-content: center; padding: 24px; } .panel { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .large-logo { font-size: 65px; text-align: center; } .brand, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .panel .brand, .panel h1, .panel > .muted { text-align: center; } label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder, .username-row input::placeholder { color: #999999; opacity: 1; } .username-row { display: flex; align-items: center; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; } .username-row span { padding-left: 13px; color: #f97316; font-size: 18px; font-weight: 900; } .username-row input { width: 100%; padding: 12px 13px 12px 4px; border: 0; outline: 0; background: #ffffff; color: #202020; } .preview-box, .message, .error-box, .success-box { margin-top: 12px; padding: 12px; border-radius: 11px; text-align: center; } .preview-box, .message { background: #fff0d9; color: #94470c; } .error-box { background: #fff0f0; color: #a32222; } .success-box { background: #eef8ef; color: #287348; } .green-button, .orange-button, .white-button, .delete-button { padding: 12px 14px; border-radius: 12px; font-weight: 900; cursor: pointer; } .green-button { width: 100%; margin-top: 16px; border: 0; background: #2e7d4f; color: #ffffff; } .orange-button { border: 0; background: #f97316; color: #ffffff; } .white-button { border: 2px solid #e7d7c5; background: #ffffff; color: #555555; } .white-button.full, .white-button.favourite { width: 100%; margin-top: 14px; } .white-button.favourite { border-color: #f97316; background: #fff0d9; color: #d65e00; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .link-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .switch-row { margin-top: 18px; color: #666666; text-align: center; } .switch-row .link-button { margin-left: 5px; } .muted { color: #666666; } .header, .content { max-width: 820px; margin: 0 auto; padding: 20px 14px; } .top-row, .section-head, .actions { display: flex; justify-content: space-between; gap: 12px; } .header nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 17px; } .tab { padding: 11px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .tab.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .tab:disabled { opacity: 0.5; } .map-wrap { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .list { display: grid; gap: 10px; margin-top: 12px; } .place-card, .history-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card { display: flex; align-items: center; gap: 12px; text-align: left; cursor: pointer; } .number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .grow { flex: 1; } .arrow { color: #bbbbbb; font-size: 30px; } .history-card h3 { margin: 0; } .rating { display: flex; gap: 4px; margin-top: 14px; font-size: 25px; } .rating .off { filter: grayscale(1); opacity: 0.22; } .tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .actions { margin-top: 12px; } .actions button { flex: 1; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(20, 15, 10, 0.42); } .dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone.selected { border-color: #f97316; background: #fff0d9; } .cone span { font-size: 27px; } .friend-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 14px 0 20px; } .friend-section { margin-top: 24px; } .friend-section h3 { margin-bottom: 10px; } .friend-card { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px; border: 1px solid #eee1d1; border-radius: 16px; background: #ffffff; color: #202020; } .avatar { width: 42px; height: 42px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; font-size: 22px; } .friend-actions { display: flex; gap: 6px; } .compact { width: auto; margin: 0; padding: 9px 11px; white-space: nowrap; } .status-badge { padding: 7px 10px; border-radius: 999px; background: #f0f0f0; color: #666666; font-size: 12px; font-weight: 900; } .status-badge.accepted { background: #eef8ef; color: #287348; } @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } } `}</style>
   );
 }
 function App() {
