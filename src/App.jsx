@@ -5,7 +5,7 @@ import {
   Marker,
   useMapsLibrary,
 } from "@vis.gl/react-google-maps";
-import { supabase } from "./supabase";
+import { supabase } from './lib/supabase';
 const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 const SEARCH_RADII = [5000, 10000, 25000, 50000];
 function degreesToRadians(degrees) {
