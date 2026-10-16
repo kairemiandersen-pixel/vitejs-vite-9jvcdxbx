@@ -1479,6 +1479,15 @@ function Styles() {
       selectedPlace.longitude,
     )
   : null;
+  const selectedPlaceDistance =
+  selectedPlace && userPosition
+    ? calculateDistance(
+        userPosition.lat,
+        userPosition.lng,
+        selectedPlace.latitude,
+        selectedPlace.longitude,
+      )
+    : null;
 const canRegisterVisit =
   selectedPlaceDistance !== null &&
   selectedPlaceDistance <= MAX_RATING_DISTANCE_METRES;
