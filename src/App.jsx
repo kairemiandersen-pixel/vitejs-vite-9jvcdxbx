@@ -1216,6 +1216,21 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
       );
     }
   }
+  const selectedPlaceDistance =
+  selectedPlace &&
+  userPosition &&
+  Number.isFinite(selectedPlace.latitude) &&
+  Number.isFinite(selectedPlace.longitude)
+    ? calculateDistance(
+        userPosition.lat,
+        userPosition.lng,
+        selectedPlace.latitude,
+        selectedPlace.longitude,
+      )
+    : null;
+const canRegisterVisit =
+  selectedPlaceDistance !== null &&
+  selectedPlaceDistance <= MAX_RATING_DISTANCE_METRES;
   return (
     <main className="app">
       {" "}
