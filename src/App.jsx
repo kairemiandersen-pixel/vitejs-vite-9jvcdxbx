@@ -1448,9 +1448,7 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
     <ProfileSettings
       session={session}
       profile={profile}
-      onProfileUpdated={onProfileUpdated}
-    />
-  );} {" "}
+      onProfileUpdated={onProfileUpdated}/>)}
       {selectedPlace && (
         <div className="overlay" onClick={() => setSelectedPlace(null)}>
           {" "}
