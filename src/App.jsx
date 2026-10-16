@@ -1492,10 +1492,8 @@ const canRegisterVisit =
   selectedPlaceDistance !== null &&
   selectedPlaceDistance <= MAX_RATING_DISTANCE_METRES;
   return (
-.distance-status { margin-top: 16px; padding: 13px; border-radius: 13px; background: #fffaf1; color: #202020; text-align: center; } .distance-status .muted { margin-top: 5px; font-size: 13px; } .rating-locked { margin-top: 14px; padding: 18px; border: 1px solid #eedfce; border-radius: 16px; background: #f8f5f0; color: #555555; text-align: center; } .rating-locked-icon { margin-bottom: 8px; font-size: 38px; filter: grayscale(1); opacity: 0.55; } .rating-locked p { color: #777777; line-height: 1.5; }
-^ @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } .friend-search { grid-template-columns: 1fr; } .friend-card { align-items: flex-start; flex-wrap: wrap; } .friend-actions { width: 100%; } .friend-actions button { flex: 1; } } `}</style>
-> 6); ^}
-function App() {
+    .distance-status { margin-top: 16px; padding: 13px; border-radius: 13px; background: #fffaf1; color: #202020; text-align: center; } .distance-status .muted { margin-top: 5px; font-size: 13px; } .rating-locked { margin-top: 14px; padding: 18px; border: 1px solid #eedfce; border-radius: 16px; background: #f8f5f0; color: #555555; text-align: center; } .rating-locked-icon { margin-bottom: 8px; font-size: 38px; filter: grayscale(1); opacity: 0.55; } .rating-locked p { color: #777777; line-height: 1.5; } @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } .friend-search { grid-template-columns: 1fr; } .friend-card { align-items: flex-start; flex-wrap: wrap; } .friend-actions { width: 100%; } .friend-actions button { flex: 1; } }
+  function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [profile, setProfile] = useState(null);
