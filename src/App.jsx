@@ -7,7 +7,8 @@ import {
 } from "@vis.gl/react-google-maps";
 import { supabase } from "./lib/supabase";
 const GOOGLE_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-const SEARCH_RADII = [5000, 10000, 25000, 50000];
+const SEARCH_RADIUS_METRES = 50000;
+const MAX_RATING_DISTANCE_METRES = 100;
 function toRadians(value) {
   return value * (Math.PI / 180);
 }
@@ -1027,7 +1028,6 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [selectedPlace, setSelectedPlace] = useState(null);
-  const [radiusIndex, setRadiusIndex] = useState(0);
   const [placeStatus, setPlaceStatus] = useState("waiting");
   const [message, setMessage] = useState("Finner posisjonen din...");
   const [rating, setRating] = useState(0);
@@ -1044,7 +1044,6 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
     profile.default_visit_visibility ||
     'friends'
   );
-  const radius = SEARCH_RADII[radiusIndex];
   const loadVisits = useCallback(async () => {
     setHistoryLoading(true);
     const result = await supabase
@@ -1090,7 +1089,7 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
     try {
       const result = await placesLibrary.Place.searchNearby({
         fields: ["id", "displayName", "location", "rating", "googleMapsURI"],
-        locationRestriction: { center: userPosition, radius },
+        locationRestriction: { center: userPosition, radius: SEARCH_RADIUS_METRES,},
         includedPrimaryTypes: ["ice_cream_shop"],
         maxResultCount: 20,
         rankPreference: placesLibrary.SearchNearbyRankPreference.DISTANCE,
@@ -1130,13 +1129,13 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
       setMessage(
         mapped.length
           ? ""
-          : "Ingen iskremsteder funnet innen " + formatRadius(radius) + ".",
+          : "Ingen iskremsteder funnet innen " ,
       );
     } catch (error) {
       setPlaceStatus("error");
       setMessage("Iskremstedene kunne ikke lastes.");
     }
-  }, [placesLibrary, userPosition, radius]);
+  }, [placesLibrary, userPosition ]);
   useEffect(() => {
     searchPlaces();
   }, [searchPlaces]);
@@ -1157,11 +1156,7 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
       'friends'
     );    
   }
-  async function saveVisit() {
-    if (!rating) {
-      setSaveMessage("Velg 1–5 iskremkjegler.");
-      return;
-    }
+async function saveVisit() { if (!selectedPlace) { return; } const currentDistance = calculateDistance( userPosition.lat, userPosition.lng, selectedPlace.latitude, selectedPlace.longitude ); if ( currentDistance > MAX_RATING_DISTANCE_METRES ) { setSaveMessage( 'Du må være innenfor 100 meter fra stedet for å registrere besøket.' ); return; } if (!rating) { setSaveMessage( 'Velg 1–5 iskremkjegler.' ); return; }                                                                                                                                                                                                                                                                                                                                                                                                   ^
     setSaving(true);
     const result = await supabase
       .from("gelato_visits")
@@ -1316,7 +1311,7 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
                 {" "}
                 <div className="eyebrow"> NÆRMEST DEG </div>{" "}
                 <h2> Iskrem i nærheten </h2>{" "}
-                <small> Søkeradius: {formatRadius(radius)} </small>{" "}
+                <small> Viser steder sortert etter avstand </small>{" "}
               </div>{" "}
               <span> {places.length} steder </span>{" "}
             </div>{" "}
@@ -1325,18 +1320,7 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
             )}{" "}
             {message && placeStatus !== "loading" && (
               <div className="message"> {message} </div>
-            )}{" "}
-            {placeStatus === "ready" &&
-              !places.length &&
-              radiusIndex < SEARCH_RADII.length - 1 && (
-                <button
-                  className="orange-button full"
-                  onClick={() => setRadiusIndex(radiusIndex + 1)}
-                >
-                  {" "}
-                  Søk innen {formatRadius(SEARCH_RADII[radiusIndex + 1])}{" "}
-                </button>
-              )}{" "}
+            )}{" "}{" "}
             <div className="list">
               {" "}
               {places.map((place, index) => (
@@ -1478,87 +1462,8 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
               {" "}
               🧭 Naviger hit{" "}
             </button>{" "}
-            <h3> Registrer nytt besøk </h3> <label> Din rating </label>{" "}
-            <div className="cones">
-              {" "}
-              {[1, 2, 3, 4, 5].map((number) => (
-                <button
-                  key={number}
-                  className={number <= rating ? "cone selected" : "cone"}
-                  onClick={() => setRating(number)}
-                >
-                  {" "}
-                  <span>🍦</span> <small> {number} </small>{" "}
-                </button>
-              ))}{" "}
-            </div>{" "}
-            <label>Smak</label>{" "}
-            <input
-              className="text-input"
-              value={flavour}
-              placeholder="For eksempel pistasj"
-              onChange={(event) => setFlavour(event.target.value)}
-            />{" "}
-            <label> Besøksdato </label>{" "}
-            <input
-              className="text-input"
-              type="date"
-              value={visitDate}
-              max={today()}
-              onChange={(event) => setVisitDate(event.target.value)}
-            />{" "}
-            <button
-              className={
-                favourite ? "white-button favourite full" : "white-button full"
-              }
-              onClick={() => setFavourite(!favourite)}
-            >
-              {" "}
-              {favourite ? "❤️ Favoritt" : "♡ Marker som favoritt"}{" "}
-            </button>
-            <div className="privacy-box">
-  {" "}
-  <label> Hvem kan se besøket? </label>{" "}
-  <div className="privacy-options">
-    {" "}
-    <button
-      type="button"
-      className={
-        visibility === "friends" ? "privacy-option active" : "privacy-option"
-      }
-      onClick={() => setVisibility("friends")}
-    >
-      {" "}
-      👥 Venner{" "}
-    </button>{" "}
-    <button
-      type="button"
-      className={
-        visibility === "private" ? "privacy-option active" : "privacy-option"
-      }
-      onClick={() => setVisibility("private")}
-    >
-      {" "}
-      🔒 Privat{" "}
-    </button>{" "}
-  </div>{" "}
-  <small className="muted">
-    {" "}
-    {visibility === "friends"
-      ? "Godkjente venner kan se besøket i vennefeeden."
-      : "Bare du kan se dette besøket."}{" "}
-  </small>{" "}
-</div>;
+            <div className="distance-status"> <strong> {canRegisterVisit ? '✅ Du er nær nok til å registrere besøket' : '🔒 Du må være innenfor 100 meter'} </strong> <div className="muted"> Beregnet avstand:{' '} {selectedPlaceDistance !== null ? formatDistance( selectedPlaceDistance ) : 'Ukjent'} </div> </div> {canRegisterVisit ? ( <> <h3> Registrer nytt besøk </h3> <label> Din rating </label> <div className="cones"> {[1, 2, 3, 4, 5].map( (number) => ( <button type="button" key={number} className={ number <= rating ? 'cone selected' : 'cone' } onClick={() => setRating(number) } > <span> 🍦 </span> <small> {number} </small> </button> ) )} </div> <label> Smak </label> <input className="text-input" value={flavour} placeholder="For eksempel pistasj" onChange={(event) => setFlavour( event.target.value ) } /> <label> Besøksdato </label> <input className="text-input" type="date" value={visitDate} max={today()} onChange={(event) => setVisitDate( event.target.value ) } /> <button type="button" className={ favourite ? 'white-button favourite full' : 'white-button full' } onClick={() => setFavourite( !favourite ) } > {favourite ? '❤️ Favoritt' : '♡ Marker som favoritt'} </button> <div className="privacy-box"> <label> Hvem kan se besøket? </label> <div className="privacy-options"> <button type="button" className={ visibility === 'friends' ? 'privacy-option active' : 'privacy-option' } onClick={() => setVisibility( 'friends' ) } > 👥 Venner </button> <button type="button" className={ visibility === 'private' ? 'privacy-option active' : 'privacy-option' } onClick={() => setVisibility( 'private' ) } > 🔒 Privat </button> </div> <small className="muted"> {visibility === 'friends' ? 'Godkjente venner kan se besøket i vennefeeden.' : 'Bare du kan se dette besøket.'} </small> </div> <button className="green-button" disabled={saving} onClick={saveVisit} > {saving ? 'Lagrer...' : 'Lagre besøket'} </button> </> ) : ( <div className="rating-locked"> <div className="rating-locked-icon"> 🍦 </div> <strong> Besøksregistrering er låst </strong> <p> Gå nærmere iskremstedet. Når du er innenfor 100 meter kan du registrere smak, rating og favoritt. </p> <button type="button" className="orange-button full" onClick={() => navigateToCoordinates( selectedPlace.latitude, selectedPlace.longitude ) } > 🧭 Naviger til stedet </button> </div> )} {saveMessage && ( <div className="message"> {saveMessage} </div> )}
             {" "}
-            <button
-              className="green-button"
-              disabled={saving}
-              onClick={saveVisit}
-            >
-              {" "}
-              {saving ? "Lagrer..." : "Lagre besøket"}{" "}
-            </button>{" "}
-            {saveMessage && <div className="message"> {saveMessage} </div>}{" "}
           </section>{" "}
         </div>
       )}{" "}
@@ -1566,10 +1471,23 @@ function GelatoHunter({ session, profile, onProfileUpdated }) {
   );
 }
 function Styles() {
+  const selectedPlaceDistance = selectedPlace
+  ? calculateDistance(
+      userPosition.lat,
+      userPosition.lng,
+      selectedPlace.latitude,
+      selectedPlace.longitude,
+    )
+  : null;
+const canRegisterVisit =
+  selectedPlaceDistance !== null &&
+  selectedPlaceDistance <= MAX_RATING_DISTANCE_METRES;
   return (
     <style>{` * { box-sizing: border-box; } body { margin: 0; } button, input { font: inherit; } button { touch-action: manipulation; } .app, .center-page { min-height: 100vh; background: #fffaf1; color: #202020; font-family: Arial, Helvetica, sans-serif; } .center-page { display: flex; align-items: center; justify-content: center; padding: 24px; } .panel { width: min(440px, 100%); padding: 28px; border: 1px solid #eedfce; border-radius: 24px; background: #ffffff; color: #202020; box-shadow: 0 18px 50px rgba(60, 35, 10, 0.12); } .large-logo { font-size: 65px; text-align: center; } .brand, .eyebrow { color: #f97316; font-size: 11px; font-weight: 900; letter-spacing: 2px; } .centered { text-align: center; } label { display: block; margin: 15px 0 7px; color: #444444; font-size: 13px; font-weight: 900; } .text-input { width: 100%; padding: 12px 13px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #202020; font-size: 16px; } .text-input::placeholder, .username-row input::placeholder { color: #999999; opacity: 1; } .username-row { display: flex; align-items: center; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; } .username-row span { padding-left: 13px; color: #f97316; font-size: 18px; font-weight: 900; } .username-row input { width: 100%; padding: 12px 13px 12px 4px; border: 0; outline: 0; background: #ffffff; color: #202020; } .preview-box, .message, .error-box, .success-box { margin-top: 12px; padding: 12px; border-radius: 11px; text-align: center; } .preview-box, .message { background: #fff0d9; color: #94470c; } .error-box { background: #fff0f0; color: #a32222; } .success-box { background: #eef8ef; color: #287348; } .green-button, .orange-button, .white-button, .delete-button { padding: 12px 14px; border-radius: 12px; font-weight: 900; cursor: pointer; } .green-button { width: 100%; margin-top: 16px; border: 0; background: #2e7d4f; color: #ffffff; } .orange-button { border: 0; background: #f97316; color: #ffffff; } .orange-button.full { width: 100%; } .white-button { border: 2px solid #e7d7c5; background: #ffffff; color: #555555; } .white-button.full, .white-button.favourite { width: 100%; margin-top: 14px; } .white-button.favourite { border-color: #f97316; background: #fff0d9; color: #d65e00; } .delete-button { border: 2px solid #dcbaba; background: #ffffff; color: #aa3333; } .link-button { margin-top: 12px; border: 0; background: transparent; color: #e8650c; font-weight: 800; cursor: pointer; } .link-button.full { width: 100%; } .switch-row { margin-top: 18px; color: #666666; text-align: center; } .switch-row .link-button { margin-left: 5px; } .muted { color: #666666; } .header, .content { max-width: 820px; margin: 0 auto; padding: 20px 14px; } .top-row, .section-head, .actions { display: flex; justify-content: space-between; gap: 12px; } .header nav { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-top: 17px; } .tab { padding: 11px; border: 2px solid #eedfce; border-radius: 13px; background: #ffffff; color: #555555; font-weight: 800; cursor: pointer; } .tab.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .map-wrap { max-width: 820px; height: 42vh; min-height: 320px; margin: 0 auto; padding: 0 12px; } .map { width: 100%; height: 100%; overflow: hidden; border-radius: 24px; } .list, .feed-list { display: grid; gap: 10px; margin-top: 12px; } .place-card, .history-card, .friend-card, .feed-card { width: 100%; padding: 14px; border: 1px solid #eee1d1; border-radius: 17px; background: #ffffff; color: #202020; } .place-card, .friend-card { display: flex; align-items: center; gap: 12px; text-align: left; } .place-card { cursor: pointer; } .number { width: 38px; height: 38px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; color: #f97316; font-weight: 900; } .grow { flex: 1; min-width: 0; } .arrow { color: #bbbbbb; font-size: 30px; } .history-card h3 { margin: 0; } .rating { display: flex; gap: 4px; margin-top: 14px; font-size: 25px; } .rating .off { filter: grayscale(1); opacity: 0.22; } .tag { display: inline-block; margin: 10px 0; padding: 7px 10px; border-radius: 10px; background: #fff0d9; color: #94470c; font-weight: 800; } .heart { width: 44px; height: 42px; border: 2px solid #dddddd; border-radius: 12px; background: #ffffff; color: #202020; font-size: 23px; cursor: pointer; } .actions { margin-top: 12px; } .actions button { flex: 1; } .friend-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 14px 0 20px; } .friend-section { margin-top: 24px; } .friend-section h3 { margin-bottom: 10px; } .avatar { width: 42px; height: 42px; display: grid; flex-shrink: 0; place-items: center; border-radius: 50%; background: #fff0d9; font-size: 22px; } .friend-actions { display: flex; gap: 6px; } .compact { width: auto; margin: 0; padding: 9px 11px; white-space: nowrap; } .badge { padding: 7px 10px; border-radius: 999px; background: #f0f0f0; color: #666666; font-size: 12px; font-weight: 900; } .badge.accepted { background: #eef8ef; color: #287348; } .feed-person { display: flex; align-items: center; gap: 11px; } .feed-heart { font-size: 22px; } .feed-place { margin: 15px 0 4px; } .feed-date, .feed-google-rating { color: #666666; font-size: 13px; } .feed-rating-text { margin-top: 4px; color: #f97316; font-size: 13px; font-weight: 900; } .feed-card .full { margin-top: 12px; } .overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-end; justify-content: center; padding: 12px; background: rgba(20, 15, 10, 0.42); } .dialog { position: relative; width: min(540px, 100%); max-height: 92vh; padding: 24px 18px 18px; overflow-y: auto; border-radius: 24px; background: #ffffff; color: #202020; } .close { position: absolute; top: 7px; right: 9px; border: 0; background: transparent; color: #777777; font-size: 30px; cursor: pointer; } .cones { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; margin-top: 8px; } .cone { height: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px solid #dddddd; border-radius: 13px; background: #f4f4f4; color: #202020; cursor: pointer; } .cone.selected { border-color: #f97316; background: #fff0d9; } .cone span { font-size: 27px; } .privacy-box { margin-top: 16px; padding: 14px; border-radius: 14px; background: #fffaf1; } .privacy-box label { margin-top: 0; } .privacy-options { display: grid; grid-template-columns: repeat( 2, minmax(0, 1fr) ); gap: 8px; margin-bottom: 8px; } .privacy-option { padding: 11px; border: 2px solid #e8ded1; border-radius: 12px; background: #ffffff; color: #555555; font-weight: 900; cursor: pointer; } .privacy-option.active { border-color: #f97316; background: #fff0d9; color: #d65e00; } .privacy-label { display: inline-block; margin-top: 8px; padding: 5px 8px; border-radius: 999px; background: #f3f3f3; color: #666666; font-size: 11px; font-weight: 900; } SyntaxError: Unexpected token (1:1)
 > 1 | .settings-card { width: 100%; padding: 20px; border: 1px solid #eee1d1; border-radius: 18px; background: #ffffff; color: #202020; } .settings-divider { height: 1px; margin: 24px 0; background: #eee1d1; } .settings-card h3 { margin: 8px 0 6px; } .settings-card .privacy-option { display: flex; flex-direction: column; align-items: center; gap: 4px; min-height: 100px; } .privacy-icon { font-size: 25px; } .privacy-option small { color: #777777; font-weight: 500; text-align: center; } .privacy-option.active small { color: #a44c0c; } .current-privacy { margin-top: 12px; padding: 11px; border-radius: 11px; background: #fffaf1; color: #555555; text-align: center; } .logout-settings-button { width: 100%; padding: 12px; border: 2px solid #e1caca; border-radius: 12px; background: #ffffff; color: #a33232; font-weight: 900; cursor: pointer; }
-    | ^ @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } .friend-search { grid-template-columns: 1fr; } .friend-card { align-items: flex-start; flex-wrap: wrap; } .friend-actions { width: 100%; } .friend-actions button { flex: 1; } } `}</style>
+    | ^ SyntaxError: Unexpected token (1:1)
+    > 1 | .distance-status { margin-top: 16px; padding: 13px; border-radius: 13px; background: #fffaf1; color: #202020; text-align: center; } .distance-status .muted { margin-top: 5px; font-size: 13px; } .rating-locked { margin-top: 14px; padding: 18px; border: 1px solid #eedfce; border-radius: 16px; background: #f8f5f0; color: #555555; text-align: center; } .rating-locked-icon { margin-bottom: 8px; font-size: 38px; filter: grayscale(1); opacity: 0.55; } .rating-locked p { color: #777777; line-height: 1.5; }
+        | ^ @media ( max-width: 560px ) { .header nav { grid-template-columns: 1fr; } .top-row, .section-head { flex-direction: column; } .friend-search { grid-template-columns: 1fr; } .friend-card { align-items: flex-start; flex-wrap: wrap; } .friend-actions { width: 100%; } .friend-actions button { flex: 1; } } `}</style>
   );
 }
 function App() {
