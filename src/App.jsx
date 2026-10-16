@@ -1486,7 +1486,7 @@ const canRegisterVisit =
 }
 function Styles() {
   return (
-    <style>{` * { box-sizing: border-box; } :root { --bg: #fff9ee; --surface: #ffffff; --surface-soft: #fff1dc; --text: #202020; --text-heading: #32251d; --text-soft: #6b625c; --text-muted: #91877f; --primary: #f97316; --primary-hover: #ea650c; --primary-soft: #fff0d9; --success: #3e7c59; --success-soft: #edf7f0; --danger: #c94a4a; --danger-soft: #fff0f0; --border: #eadcca; --border-dark: #ddc9b2; --shadow: 0 18px 50px rgba(72, 45, 24, 0.12); } h1, h2, h3 { color: var(--text-heading); } .header h1 { color: var(--text-heading); } .header p { color: var(--text-soft); } } `}</style>
+    <style>{` * { box-sizing: border-box; } :root { --bg: #fff9ee; --surface: #ffffff; --surface-soft: #fff1dc; --text: #202020; --text-heading: #32251d; --text-soft: #6b625c; --text-muted: #91877f; --primary: #f97316; --primary-hover: #ea650c; --primary-soft: #fff0d9; --success: #3e7c59; --success-soft: #edf7f0; --danger: #c94a4a; --danger-soft: #fff0f0; --border: #eadcca; --border-dark: #ddc9b2; --shadow: 0 18px 50px rgba(72, 45, 24, 0.12); } h1, h2, h3 { color: var(--text-heading); } .header h1 { color: var(--text-heading); } .header p { color: var(--text-soft); } body { margin: 0; } button, input { font: inherit; } } `}</style>
   );
 }
   function App() {
